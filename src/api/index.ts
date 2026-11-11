@@ -1,7 +1,7 @@
 export { apiClient } from './client';
-export { authApi } from './auth.api';
-export { pricingApi } from './pricing.api';
-export { ordersApi } from './orders.api';
-export { quotesApi } from './quotes.api';
-export { couponsApi } from './coupons.api';
-export { documentsApi } from './documents.api';
+export * from './auth.api';
+export * from './pricing.api';
+export * from './orders.api';
+export * from './quotes.api';
+export * from './coupons.api';
+export * from './documents.api';

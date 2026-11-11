@@ -21,8 +21,8 @@ export interface CreateCouponPayload {
 export const couponsApi = {
   // Validate coupon at checkout / in copy shop
   validate: async (code: string, orderAmount: number): Promise<{ valid: boolean; discountAmount: number; coupon?: CouponItem; message?: string }> => {
-    const res = await apiClient.post('/coupons/validate', { code, orderAmount });
-    return res.data;
+    const res = await apiClient.post('/coupons/validate', { code, subtotal: orderAmount, orderAmount });
+    return res.data.data || res.data;
   },
 
   // Admin lists coupons

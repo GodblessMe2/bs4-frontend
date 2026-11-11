@@ -7,6 +7,7 @@ export interface SubmitQuotePayload {
   serviceCategory: string;
   quantity: number;
   specifications: any;
+  fileUrls?: any[];
   customerNotes?: string;
 }
 
@@ -21,6 +22,12 @@ export const quotesApi = {
   submitQuoteRequest: async (payload: SubmitQuotePayload): Promise<any> => {
     const res = await apiClient.post('/quotes', payload);
     return res.data.data;
+  },
+
+  // Authenticated customer: get own quotes for dashboard payment
+  getMyQuotes: async (): Promise<any[]> => {
+    const res = await apiClient.get('/quotes/my-quotes');
+    return res.data.data || [];
   },
 
   // Customer or Admin gets quote by unique identifier / quoteNumber

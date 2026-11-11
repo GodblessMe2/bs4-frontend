@@ -1,5 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { pricingApi, PriceTierItem } from '../api';
+import { formatGBP } from '../lib/utils';
 import { 
   Printer, 
   UploadCloud, 
@@ -17,6 +19,22 @@ import {
 } from 'lucide-react';
 
 export const LandingPage: React.FC = () => {
+  const [tiers, setTiers] = useState<PriceTierItem[]>([]);
+
+  useEffect(() => {
+    pricingApi
+      .queryTiers({ isActive: true })
+      .then((res) => setTiers(res || []))
+      .catch(() => {
+        // Fallback to official 2026 baseline rates displayed below
+      });
+  }, []);
+
+  const findRate = (category: string, subCategory: string, minQty: number, fallback: number): number => {
+    const match = tiers.find((t) => t.category === category && t.subCategory === subCategory && t.minQty === minQty);
+    return match && match.unitPrice != null ? Number(match.unitPrice) : fallback;
+  };
+
   return (
     <div className="bg-slate-50 min-h-screen text-slate-900">
       {/* Hero Section */}
@@ -50,7 +68,7 @@ export const LandingPage: React.FC = () => {
               <div className="pt-2 flex flex-wrap items-center justify-center lg:justify-start gap-4 text-xs font-medium text-slate-300">
                 <div className="flex items-center gap-1.5 bg-slate-800/80 border border-slate-700/80 px-3 py-1.5 rounded-md">
                   <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>From <strong>6p / sheet</strong></span>
+                  <span>From <strong>10p / side</strong></span>
                 </div>
                 <div className="flex items-center gap-1.5 bg-slate-800/80 border border-slate-700/80 px-3 py-1.5 rounded-md">
                   <CheckCircle2 className="w-4 h-4 text-emerald-400" />
@@ -188,7 +206,7 @@ export const LandingPage: React.FC = () => {
               <p className="text-xs text-slate-600 leading-relaxed mb-4">
                 University compliant margin formats, 100gsm silky paper, wire or coil binding with crystal clear protective covers.
               </p>
-              <Link to="/copyshop" className="text-xs font-bold text-blue-600 inline-flex items-center gap-1 hover:gap-2 transition-all">
+              <Link to="/copyshop?preset=dissertation" className="text-xs font-bold text-blue-600 inline-flex items-center gap-1 hover:gap-2 transition-all">
                 Print Dissertation <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             </div>
@@ -202,7 +220,7 @@ export const LandingPage: React.FC = () => {
               <p className="text-xs text-slate-600 leading-relaxed mb-4">
                 Economical double-sided B&W or colour pages, 2-hole or 4-hole punched for binders, or bound with durable coils.
               </p>
-              <Link to="/copyshop" className="text-xs font-bold text-blue-600 inline-flex items-center gap-1 hover:gap-2 transition-all">
+              <Link to="/copyshop?preset=manuals" className="text-xs font-bold text-blue-600 inline-flex items-center gap-1 hover:gap-2 transition-all">
                 Print Manuals <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             </div>
@@ -216,7 +234,7 @@ export const LandingPage: React.FC = () => {
               <p className="text-xs text-slate-600 leading-relaxed mb-4">
                 Strict confidential handling, high-speed single-sided or duplex print runs, corner or booklet stapled.
               </p>
-              <Link to="/copyshop" className="text-xs font-bold text-blue-600 inline-flex items-center gap-1 hover:gap-2 transition-all">
+              <Link to="/copyshop?preset=legal" className="text-xs font-bold text-blue-600 inline-flex items-center gap-1 hover:gap-2 transition-all">
                 Print Documents <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             </div>
@@ -228,9 +246,9 @@ export const LandingPage: React.FC = () => {
               </div>
               <h3 className="text-lg font-bold text-slate-900 mb-2">A3 Posters & Architectural Plans</h3>
               <p className="text-xs text-slate-600 leading-relaxed mb-4">
-                Crisp vector lines, CAD schematics, and presentation charts printed on high-grade A3 100gsm or 300gsm stock.
+                Crisp vector lines, CAD schematics, and presentation charts printed on high-grade A3 120gsm or 300gsm stock.
               </p>
-              <Link to="/copyshop" className="text-xs font-bold text-blue-600 inline-flex items-center gap-1 hover:gap-2 transition-all">
+              <Link to="/copyshop?preset=a3_plans" className="text-xs font-bold text-blue-600 inline-flex items-center gap-1 hover:gap-2 transition-all">
                 Print A3 Plans <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             </div>
@@ -321,10 +339,10 @@ export const LandingPage: React.FC = () => {
 
                 <div className="flex gap-4 p-4 rounded-xl border border-slate-200 bg-slate-50">
                   <div className="w-10 h-10 rounded-lg bg-indigo-600/10 text-indigo-600 flex items-center justify-center font-bold text-sm shrink-0">
-                    100g
+                    120g
                   </div>
                   <div>
-                    <h4 className="text-sm font-bold text-slate-900">Premium Silk 100gsm</h4>
+                    <h4 className="text-sm font-bold text-slate-900">Premium Uncoated 120gsm</h4>
                     <p className="text-xs text-slate-600">Enhanced thickness and whiteness. Ideal for double-sided colour printing without show-through.</p>
                   </div>
                 </div>
@@ -341,48 +359,62 @@ export const LandingPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Transparent Pricing Table */}
+            {/* Transparent Live 2026 Pricing Table */}
             <div id="pricing-guide" className="bg-slate-900 text-white rounded-2xl p-6 sm:p-8 shadow-xl space-y-6">
               <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                 <div>
-                  <h3 className="text-lg font-bold text-white">UK Copy Shop Base Rates</h3>
-                  <p className="text-xs text-slate-400">All prices in GBP (£) per physical sheet</p>
+                  <h3 className="text-lg font-bold text-white">2026 Copy Shop Retail Rates</h3>
+                  <p className="text-xs text-slate-400">Live GBP (£) rates per printed side • Minimum order £2.00</p>
                 </div>
-                <span className="text-xs font-semibold px-2.5 py-1 rounded bg-blue-500/20 text-blue-300">A4 Format</span>
+                <span className="text-xs font-semibold px-2.5 py-1 rounded bg-blue-500/20 text-blue-300">80gsm Standard</span>
               </div>
 
               <div className="overflow-x-auto">
                 <table className="w-full text-xs text-left">
                   <thead>
                     <tr className="text-slate-400 border-b border-slate-800">
-                      <th className="pb-3">Paper Stock</th>
-                      <th className="pb-3">B&W (Simplex)</th>
-                      <th className="pb-3">B&W (Duplex)</th>
-                      <th className="pb-3">Colour (Simplex)</th>
-                      <th className="pb-3">Colour (Duplex)</th>
+                      <th className="pb-3">Quantity (Sides)</th>
+                      <th className="pb-3">A4 B&W</th>
+                      <th className="pb-3">A4 Colour</th>
+                      <th className="pb-3">A3 B&W</th>
+                      <th className="pb-3">A3 Colour</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-mono">
                     <tr>
-                      <td className="py-3 font-sans text-slate-200">80gsm Standard</td>
-                      <td className="py-3">£0.08</td>
-                      <td className="py-3 text-emerald-400">£0.12</td>
-                      <td className="py-3">£0.25</td>
-                      <td className="py-3 text-emerald-400">£0.40</td>
+                      <td className="py-2.5 font-sans text-slate-200">1 – 25 sides</td>
+                      <td className="py-2.5">{formatGBP(findRate('document_80gsm', 'A4_BW', 1, 0.25))}</td>
+                      <td className="py-2.5 text-blue-300">{formatGBP(findRate('document_80gsm', 'A4_Color', 1, 0.50))}</td>
+                      <td className="py-2.5">{formatGBP(findRate('document_80gsm', 'A3_BW', 1, 0.60))}</td>
+                      <td className="py-2.5 text-blue-300">{formatGBP(findRate('document_80gsm', 'A3_Color', 1, 1.20))}</td>
                     </tr>
                     <tr>
-                      <td className="py-3 font-sans text-slate-200">100gsm Premium Silk</td>
-                      <td className="py-3">£0.12</td>
-                      <td className="py-3 text-emerald-400">£0.16</td>
-                      <td className="py-3">£0.32</td>
-                      <td className="py-3 text-emerald-400">£0.48</td>
+                      <td className="py-2.5 font-sans text-slate-200">26 – 50 sides</td>
+                      <td className="py-2.5">{formatGBP(findRate('document_80gsm', 'A4_BW', 26, 0.20))}</td>
+                      <td className="py-2.5 text-blue-300">{formatGBP(findRate('document_80gsm', 'A4_Color', 26, 0.45))}</td>
+                      <td className="py-2.5">{formatGBP(findRate('document_80gsm', 'A3_BW', 26, 0.45))}</td>
+                      <td className="py-2.5 text-blue-300">{formatGBP(findRate('document_80gsm', 'A3_Color', 26, 0.90))}</td>
                     </tr>
                     <tr>
-                      <td className="py-3 font-sans text-slate-200">300gsm Cardstock</td>
-                      <td className="py-3">£0.30</td>
-                      <td className="py-3 text-emerald-400">£0.45</td>
-                      <td className="py-3">£0.60</td>
-                      <td className="py-3 text-emerald-400">£0.90</td>
+                      <td className="py-2.5 font-sans text-slate-200">51 – 100 sides</td>
+                      <td className="py-2.5">{formatGBP(findRate('document_80gsm', 'A4_BW', 51, 0.18))}</td>
+                      <td className="py-2.5 text-blue-300">{formatGBP(findRate('document_80gsm', 'A4_Color', 51, 0.40))}</td>
+                      <td className="py-2.5">{formatGBP(findRate('document_80gsm', 'A3_BW', 51, 0.30))}</td>
+                      <td className="py-2.5 text-blue-300">{formatGBP(findRate('document_80gsm', 'A3_Color', 51, 0.80))}</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2.5 font-sans text-slate-200">101 – 500 sides</td>
+                      <td className="py-2.5">{formatGBP(findRate('document_80gsm', 'A4_BW', 101, 0.15))}</td>
+                      <td className="py-2.5 text-blue-300">{formatGBP(findRate('document_80gsm', 'A4_Color', 101, 0.35))}</td>
+                      <td className="py-2.5">{formatGBP(findRate('document_80gsm', 'A3_BW', 101, 0.26))}</td>
+                      <td className="py-2.5 text-blue-300">{formatGBP(findRate('document_80gsm', 'A3_Color', 101, 0.70))}</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2.5 font-sans text-slate-200">501 – 1,000 sides</td>
+                      <td className="py-2.5 text-emerald-400 font-bold">{formatGBP(findRate('document_80gsm', 'A4_BW', 501, 0.10))}</td>
+                      <td className="py-2.5 text-emerald-400 font-bold">{formatGBP(findRate('document_80gsm', 'A4_Color', 501, 0.25))}</td>
+                      <td className="py-2.5 text-emerald-400 font-bold">{formatGBP(findRate('document_80gsm', 'A3_BW', 501, 0.20))}</td>
+                      <td className="py-2.5 text-emerald-400 font-bold">{formatGBP(findRate('document_80gsm', 'A3_Color', 501, 0.50))}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -391,15 +423,15 @@ export const LandingPage: React.FC = () => {
               <div className="bg-slate-800/80 p-4 rounded-xl text-xs space-y-2 border border-slate-700/60">
                 <div className="flex justify-between text-slate-300">
                   <span>Metal Wire / Spiral Binding:</span>
-                  <span className="font-semibold text-white">£2.20 per book</span>
+                  <span className="font-semibold text-white">£2.20 per book (1–100 sheets)</span>
                 </div>
                 <div className="flex justify-between text-slate-300">
                   <span>Protective Clear Acetate Cover:</span>
                   <span className="font-semibold text-white">£0.45</span>
                 </div>
                 <div className="flex justify-between text-slate-300">
-                  <span>Volume Discounts:</span>
-                  <span className="font-semibold text-emerald-400">Up to 20% off for 10+ copies</span>
+                  <span>1,000+ Printed Sides / Wholesale:</span>
+                  <span className="font-semibold text-amber-300">Custom Quote Available</span>
                 </div>
               </div>
 

@@ -1,49 +1,114 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { 
-  ShieldCheck, 
-  Truck, 
-  CreditCard, 
-  Lock, 
-  ArrowLeft, 
-  UserCheck, 
-  AlertCircle,
+import {
+  ShieldCheck,
+  CreditCard,
+  Truck,
+  ArrowLeft,
+  Lock,
   CheckCircle2,
-  FileText
+  UserCheck,
+  AlertCircle,
+  Loader2,
+  Tag,
+  MapPin,
+  FileText,
+  LogIn,
+  X,
 } from 'lucide-react';
 import { formatGBP } from '../lib/utils';
-import { authApi, ordersApi } from '../api';
+import { authApi, ordersApi, couponsApi, SavedAddressItem } from '../api';
 
 export const CheckoutPage: React.FC = () => {
   const navigate = useNavigate();
   const [jobData, setJobData] = useState<any>(null);
 
-  // Customer contact state
+  // Auth / customer state
+  const [loggedInUser, setLoggedInUser] = useState<any>(() => {
+    try {
+      const raw = localStorage.getItem('bs4_user');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [savedAddresses, setSavedAddresses] = useState<SavedAddressItem[]>([]);
+  const [selectedAddressId, setSelectedAddressId] = useState<string>('new');
+  const [saveNewAddress, setSaveNewAddress] = useState(false);
+  const [newAddressLabel, setNewAddressLabel] = useState('Home');
+
+  // Contact / Registration
   const [email, setEmail] = useState('');
   const [isReturningUser, setIsReturningUser] = useState(false);
-  const [isCheckingEmail, setIsCheckingEmail] = useState(false);
-  const [createAccount, setCreateAccount] = useState(false);
+  const [inlinePassword, setInlinePassword] = useState('');
+  const [inlineLoginLoading, setInlineLoginLoading] = useState(false);
+  const [inlineLoginError, setInlineLoginError] = useState<string | null>(null);
+  const [createAccount, setCreateAccount] = useState(true);
   const [password, setPassword] = useState('');
 
-  // Shipping Address state (UK formatted)
+  // UK Shipping Address
   const [recipientName, setRecipientName] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [addressLine1, setAddressLine1] = useState('');
   const [addressLine2, setAddressLine2] = useState('');
-  const [city, setCity] = useState('');
-  const [county, setCounty] = useState('');
+  const [city, setCity] = useState('Bristol');
   const [postcode, setPostcode] = useState('');
   const [phone, setPhone] = useState('');
 
-  // Payment method
+  // Billing Address
+  const [billingSameAsDelivery, setBillingSameAsDelivery] = useState(true);
+  const [billingRecipientName, setBillingRecipientName] = useState('');
+  const [billingCompanyName, setBillingCompanyName] = useState('');
+  const [billingAddressLine1, setBillingAddressLine1] = useState('');
+  const [billingAddressLine2, setBillingAddressLine2] = useState('');
+  const [billingCity, setBillingCity] = useState('Bristol');
+  const [billingPostcode, setBillingPostcode] = useState('');
+
+  // Delivery & Coupon state
+  const [shippingMethod, setShippingMethod] = useState<'standard' | 'express'>('standard');
+  const [couponInput, setCouponInput] = useState('');
+  const [appliedCouponCode, setAppliedCouponCode] = useState<string | null>(null);
+  const [discountAmount, setDiscountAmount] = useState<number>(0);
+  const [couponMessage, setCouponMessage] = useState<string | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [isApplyingCoupon, setIsApplyingCoupon] = useState(false);
+
+  // Payment & Terms
   const [paymentMethod, setPaymentMethod] = useState<'stripe' | 'paypal'>('stripe');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [cardNumber, setCardNumber] = useState('');
+  const [cardExpiry, setCardExpiry] = useState('');
+  const [cardCvc, setCardCvc] = useState('');
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+
+  // Submission state
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [paymentStep, setPaymentStep] = useState<'form' | 'processing' | 'redirecting'>('form');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [cardNumber, setCardNumber] = useState('4242 4242 4242 4242');
-  const [cardExpiry, setCardExpiry] = useState('12/28');
-  const [cardCvc, setCardCvc] = useState('123');
-  const [cardName, setCardName] = useState('');
-  const [processingStep, setProcessingStep] = useState<string>('');
+
+  const applySavedAddress = (addr: SavedAddressItem) => {
+    setSelectedAddressId(addr.id || 'saved');
+    setRecipientName(addr.recipientName || '');
+    setCompanyName(addr.companyName || '');
+    setAddressLine1(addr.addressLine1 || '');
+    setAddressLine2(addr.addressLine2 || '');
+    setCity(addr.city || '');
+    setPostcode(addr.postcode || '');
+    if (addr.phone) setPhone(addr.phone);
+  };
+
+  const loadCustomerAddresses = async () => {
+    if (!localStorage.getItem('bs4_token')) return;
+    try {
+      const addresses = await authApi.getAddresses();
+      setSavedAddresses(addresses);
+      if (addresses.length > 0) {
+        const defaultAddr = addresses.find((a) => a.isDefault) || addresses[0];
+        applySavedAddress(defaultAddr);
+      }
+    } catch {
+      // Non-fatal if addresses fail to load
+    }
+  };
 
   useEffect(() => {
     const savedJob = sessionStorage.getItem('bs4_current_job');
@@ -53,29 +118,130 @@ export const CheckoutPage: React.FC = () => {
     }
     const parsed = JSON.parse(savedJob);
     setJobData(parsed);
+
+    if (parsed.pricing?.shippingMethod === 'express') {
+      setShippingMethod('express');
+    } else {
+      setShippingMethod('standard');
+    }
+
+    if (parsed.pricing?.couponCode) {
+      setAppliedCouponCode(parsed.pricing.couponCode);
+      setCouponInput(parsed.pricing.couponCode);
+      setDiscountAmount(Number(parsed.pricing.discountAmount || 0));
+    }
+
     if (parsed.customer) {
       if (parsed.customer.email) setEmail(parsed.customer.email);
       if (parsed.customer.name) setRecipientName(parsed.customer.name);
       if (parsed.customer.phone) setPhone(parsed.customer.phone);
     }
+
+    const token = localStorage.getItem('bs4_token');
+    if (token) {
+      const rawUser = localStorage.getItem('bs4_user');
+      if (rawUser) {
+        try {
+          const u = JSON.parse(rawUser);
+          setLoggedInUser(u);
+          if (u.email && !parsed.customer?.email) setEmail(u.email);
+          const fullName = `${u.firstName || ''} ${u.lastName || ''}`.trim();
+          if (fullName && !parsed.customer?.name) setRecipientName(fullName);
+          if (u.phone && !parsed.customer?.phone) setPhone(u.phone);
+        } catch {
+          // ignore invalid json
+        }
+      }
+      loadCustomerAddresses();
+    }
   }, [navigate]);
 
-  // Check if email already belongs to a registered customer
-  const handleEmailBlur = async () => {
-    if (!email || !email.includes('@')) return;
-    setIsCheckingEmail(true);
-    try {
-      const data: any = await authApi.checkEmail(email);
-      if (data && (data.isRegistered || data.exists)) {
-        setIsReturningUser(true);
-      } else {
-        setIsReturningUser(false);
-      }
-    } catch (err) {
-      // Ignore if offline
-    } finally {
-      setIsCheckingEmail(false);
+  // Live financial summary calculation
+  const pricingSummary = useMemo(() => {
+    if (!jobData) {
+      return { subtotal: 0, discount: 0, shippingCost: 0, totalPayable: 0 };
     }
+    const isQuoteOrder = Boolean(jobData.isQuoteOrder);
+    const subtotal = Number(jobData.pricing?.subtotal || 0);
+    const discount = isQuoteOrder ? 0 : Math.min(Number(discountAmount || 0), subtotal);
+    const afterDiscount = Math.max(0, Number((subtotal - discount).toFixed(2)));
+    const shippingCost =
+      shippingMethod === 'express'
+        ? 6.99
+        : isQuoteOrder || afterDiscount >= 30
+        ? 0
+        : 3.5;
+    const totalPayable = Number((afterDiscount + shippingCost).toFixed(2));
+    return { subtotal, discount, shippingCost, totalPayable };
+  }, [jobData, discountAmount, shippingMethod]);
+
+  const handleEmailBlur = async () => {
+    if (!email || !email.includes('@') || loggedInUser) return;
+    try {
+      const data = await authApi.checkEmail(email.trim());
+      setIsReturningUser(Boolean(data.isRegistered));
+      if (data.isRegistered) {
+        setCreateAccount(false);
+      }
+    } catch {
+      setIsReturningUser(false);
+    }
+  };
+
+  const handleInlineLogin = async () => {
+    if (!email || !inlinePassword) {
+      setInlineLoginError('Enter your password to sign in.');
+      return;
+    }
+    setInlineLoginLoading(true);
+    setInlineLoginError(null);
+    try {
+      const auth = await authApi.login({ email: email.trim(), password: inlinePassword });
+      localStorage.setItem('bs4_token', auth.token);
+      localStorage.setItem('bs4_user', JSON.stringify(auth.user));
+      window.dispatchEvent(new Event('bs4-auth-change'));
+      setLoggedInUser(auth.user);
+      setIsReturningUser(false);
+      setCreateAccount(false);
+      setInlinePassword('');
+      const fullName = `${auth.user.firstName || ''} ${auth.user.lastName || ''}`.trim();
+      if (fullName && !recipientName) setRecipientName(fullName);
+      if (auth.user.phone && !phone) setPhone(auth.user.phone);
+      await loadCustomerAddresses();
+    } catch (err: any) {
+      setInlineLoginError(err.response?.data?.message || 'Incorrect password. Please try again.');
+    } finally {
+      setInlineLoginLoading(false);
+    }
+  };
+
+  const handleApplyCoupon = async () => {
+    if (!couponInput.trim() || !jobData) return;
+    setIsApplyingCoupon(true);
+    setCouponError(null);
+    setCouponMessage(null);
+    try {
+      const res = await couponsApi.validate(couponInput.trim(), Number(jobData.pricing?.subtotal || 0));
+      if (res.valid) {
+        setAppliedCouponCode(res.coupon?.code || couponInput.trim().toUpperCase());
+        setDiscountAmount(Number(res.discountAmount || 0));
+        setCouponMessage(`Code applied: -${formatGBP(Number(res.discountAmount || 0))} off`);
+      } else {
+        setCouponError(res.message || 'Coupon could not be applied.');
+      }
+    } catch (err: any) {
+      setCouponError(err.response?.data?.message || 'Invalid or expired coupon code.');
+    } finally {
+      setIsApplyingCoupon(false);
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    setAppliedCouponCode(null);
+    setDiscountAmount(0);
+    setCouponInput('');
+    setCouponMessage(null);
+    setCouponError(null);
   };
 
   const handlePlaceOrder = async (e: React.FormEvent) => {
@@ -83,43 +249,81 @@ export const CheckoutPage: React.FC = () => {
     setErrorMessage(null);
 
     if (!recipientName || !addressLine1 || !city || !postcode || !phone) {
-      setErrorMessage('Please fill in all required delivery address fields.');
+      setErrorMessage('Please fill in all required UK delivery fields.');
+      return;
+    }
+    if (!billingSameAsDelivery && (!billingRecipientName || !billingAddressLine1 || !billingCity || !billingPostcode)) {
+      setErrorMessage('Please complete your UK billing address fields.');
+      return;
+    }
+    if (!acceptedTerms) {
+      setErrorMessage('Please accept the Print Production & Delivery Terms before paying.');
+      return;
+    }
+    if (!loggedInUser && createAccount && password.length < 6) {
+      setErrorMessage('Password must be at least 6 characters to create an account.');
+      return;
+    }
+    if (paymentMethod === 'stripe' && (!cardNumber.trim() || !cardExpiry.trim() || !cardCvc.trim())) {
+      setErrorMessage('Please enter your card details or switch to PayPal.');
       return;
     }
 
-    if (paymentMethod === 'stripe' && (!cardNumber || !cardExpiry || !cardCvc)) {
-      setErrorMessage('Please fill in card details to complete payment.');
+    const uploadedFileIds =
+      jobData.files?.map((f: any) => f.id || f.serverFileId).filter(Boolean) || [];
+
+    if (!jobData.isQuoteOrder && uploadedFileIds.length === 0) {
+      setErrorMessage('Your uploaded PDF session has expired or contains no server files. Please re-upload your PDF in the Copy Shop.');
       return;
     }
 
-    setIsSubmitting(true);
-    setProcessingStep('Creating print order in system...');
+    setIsProcessing(true);
+    setPaymentStep('processing');
+
+    const deliveryAddressObj = {
+      recipientName,
+      companyName: companyName || undefined,
+      addressLine1,
+      addressLine2: addressLine2 || undefined,
+      city,
+      postcode: postcode.toUpperCase(),
+      country: 'United Kingdom',
+      phone,
+    };
+
+    const billingAddressObj = billingSameAsDelivery
+      ? deliveryAddressObj
+      : {
+          recipientName: billingRecipientName,
+          companyName: billingCompanyName || undefined,
+          addressLine1: billingAddressLine1,
+          addressLine2: billingAddressLine2 || undefined,
+          city: billingCity,
+          postcode: billingPostcode.toUpperCase(),
+          country: 'United Kingdom',
+          phone,
+        };
 
     const orderPayload: any = {
-      customerEmail: email,
+      quoteId: jobData.isQuoteOrder ? jobData.quoteId : undefined,
+      customerEmail: email.trim(),
       customerFirstName: recipientName.split(' ')[0] || recipientName,
       customerLastName: recipientName.split(' ').slice(1).join(' ') || 'Customer',
       customerPhone: phone,
-      createAccount,
-      password: createAccount ? password : undefined,
-      shippingMethod: jobData.pricing?.shippingMethod || 'standard',
-      shippingAddress: {
-        recipientName,
-        companyName,
-        addressLine1,
-        addressLine2,
-        city,
-        county,
-        postcode: postcode.toUpperCase(),
-        country: 'GB',
-        phone,
-      },
-      couponCode: jobData.pricing?.couponCode,
+      createAccount: !loggedInUser && createAccount,
+      password: !loggedInUser && createAccount ? password : undefined,
+      shippingMethod,
+      shippingAddress: deliveryAddressObj,
+      billingAddress: billingAddressObj,
+      couponCode: !jobData.isQuoteOrder ? appliedCouponCode || undefined : undefined,
       items: [
         {
-          jobName: jobData.files?.[0]?.name || 'Document Print Job',
+          jobName:
+            jobData.files?.length > 1
+              ? `${jobData.files[0]?.name || 'Document'} (+${jobData.files.length - 1} more)`
+              : jobData.files?.[0]?.name || jobData.quoteNumber || 'Document Print Job',
           copies: jobData.config?.copies || 1,
-          fileIds: jobData.files?.map((f: any) => f.id || f.serverFileId).filter(Boolean) || [],
+          fileIds: uploadedFileIds,
           config: jobData.config,
         },
       ],
@@ -131,24 +335,52 @@ export const CheckoutPage: React.FC = () => {
       const data = await ordersApi.createOrder(orderPayload);
       const placedOrder = data.order || data;
 
-      setProcessingStep('Authorizing payment and confirming with press...');
+      // Save customer JWT if account was created during checkout
+      if (data.userToken) {
+        localStorage.setItem('bs4_token', data.userToken);
+        localStorage.setItem(
+          'bs4_user',
+          JSON.stringify({
+            id: placedOrder.userId,
+            email: email.trim(),
+            firstName: orderPayload.customerFirstName,
+            lastName: orderPayload.customerLastName,
+            phone,
+            role: 'customer',
+          })
+        );
+        window.dispatchEvent(new Event('bs4-auth-change'));
+      }
 
-      // 2. Complete payment in backend (which records paymentStatus: succeeded and status: paid)
+      // Optionally save new address for logged-in or newly created user
+      if ((loggedInUser || data.userToken) && selectedAddressId === 'new' && saveNewAddress) {
+        try {
+          await authApi.saveAddress({
+            label: newAddressLabel.trim() || 'Delivery Address',
+            ...deliveryAddressObj,
+            isDefault: savedAddresses.length === 0,
+          });
+        } catch {
+          // Non-fatal if address saving fails
+        }
+      }
+
+      // 2. Confirm / Process Payment in MySQL
+      setPaymentStep('redirecting');
       const paidOrder = await ordersApi.confirmPayment(placedOrder.id);
 
-      setProcessingStep('Payment succeeded! Redirecting to confirmation...');
-
-      // Save confirmed order reference and clear current cart
-      sessionStorage.setItem('bs4_confirmed_order', JSON.stringify(paidOrder || placedOrder));
+      // 3. Persist completed order summary locally for Confirmation view
+      sessionStorage.setItem('bs4_completed_order', JSON.stringify(paidOrder || placedOrder));
       sessionStorage.removeItem('bs4_current_job');
-
       navigate(`/order-confirmation/${placedOrder.orderNumber}`);
-    } catch (err: any) {
-      console.error('Order creation error:', err);
-      setErrorMessage(err.message || 'Payment processing failed. Please check your details and try again.');
-    } finally {
-      setIsSubmitting(false);
-      setProcessingStep('');
+    } catch (error: any) {
+      setErrorMessage(
+        error.response?.data?.message ||
+          error.message ||
+          'Failed to submit order. Please ensure backend is running and details are valid.'
+      );
+      setIsProcessing(false);
+      setPaymentStep('form');
     }
   };
 
@@ -157,27 +389,41 @@ export const CheckoutPage: React.FC = () => {
   return (
     <div className="bg-slate-50 min-h-screen py-10">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-        
         {/* Navigation Breadcrumb */}
         <div className="mb-6">
-          <Link to="/copyshop" className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-900 transition-colors">
-            <ArrowLeft className="w-3.5 h-3.5" /> Back to Configurator
+          <Link
+            to={jobData.isQuoteOrder ? '/account' : '/copyshop'}
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-900 transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />{' '}
+            {jobData.isQuoteOrder ? 'Back to My Account' : 'Back to Configurator'}
           </Link>
-          <h1 className="text-2xl font-black text-slate-900 mt-2">Delivery & Secure Checkout</h1>
+          <div className="flex flex-wrap items-center justify-between gap-2 mt-2">
+            <h1 className="text-2xl font-black text-slate-900">Delivery & Secure Checkout</h1>
+            {jobData.isQuoteOrder && (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-xs font-bold text-indigo-700">
+                Custom Quote Approved • {jobData.quoteNumber}
+              </span>
+            )}
+          </div>
         </div>
 
         <form onSubmit={handlePlaceOrder} className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          
           {/* Left Column: Form (7 cols) */}
           <div className="lg:col-span-7 space-y-6">
-            
             {/* 1. Customer Information */}
             <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">
                   1. Contact Information
                 </h2>
-                <span className="text-xs text-slate-500">Order tracking updates</span>
+                {loggedInUser ? (
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                    <UserCheck className="w-3.5 h-3.5" /> Signed in as {loggedInUser.firstName || loggedInUser.email}
+                  </span>
+                ) : (
+                  <span className="text-xs text-slate-500">Order tracking updates</span>
+                )}
               </div>
 
               <div>
@@ -187,26 +433,52 @@ export const CheckoutPage: React.FC = () => {
                 <input
                   type="email"
                   required
+                  readOnly={Boolean(loggedInUser)}
                   placeholder="e.g. yourname@gmail.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   onBlur={handleEmailBlur}
-                  className="w-full text-sm p-3 rounded-xl border border-slate-300 focus:border-blue-500 focus:outline-hidden"
+                  className={`w-full text-sm p-3 rounded-xl border border-slate-300 focus:border-blue-500 focus:outline-hidden ${
+                    loggedInUser ? 'bg-slate-50 text-slate-600' : ''
+                  }`}
                 />
               </div>
 
-              {/* Returning User Notification */}
-              {isReturningUser && (
-                <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-start gap-2.5">
-                  <UserCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-                  <div>
-                    <span className="font-bold">Welcome back!</span> We found your account. Complete your order below and it will automatically attach to your order history.
+              {/* Returning User Inline Sign-In */}
+              {!loggedInUser && isReturningUser && (
+                <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl space-y-3">
+                  <div className="flex items-start gap-2.5 text-xs text-blue-900">
+                    <UserCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold">Welcome back!</span> This email has a registered BS4 account. Sign in below to load your saved UK addresses, or continue as a guest.
+                    </div>
                   </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="password"
+                      placeholder="Enter account password"
+                      value={inlinePassword}
+                      onChange={(e) => setInlinePassword(e.target.value)}
+                      className="flex-1 text-xs p-2.5 rounded-lg border border-blue-200 bg-white focus:border-blue-500 focus:outline-hidden"
+                    />
+                    <button
+                      type="button"
+                      disabled={inlineLoginLoading}
+                      onClick={handleInlineLogin}
+                      className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {inlineLoginLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LogIn className="w-3.5 h-3.5" />}
+                      Sign In
+                    </button>
+                  </div>
+                  {inlineLoginError && (
+                    <p className="text-xs font-semibold text-red-600">{inlineLoginError}</p>
+                  )}
                 </div>
               )}
 
               {/* Create account option for guests */}
-              {!isReturningUser && (
+              {!loggedInUser && !isReturningUser && (
                 <div className="pt-2">
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700 select-none">
                     <input
@@ -221,7 +493,7 @@ export const CheckoutPage: React.FC = () => {
                   {createAccount && (
                     <div className="mt-3">
                       <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Choose Password
+                        Choose Password *
                       </label>
                       <input
                         type="password"
@@ -245,6 +517,61 @@ export const CheckoutPage: React.FC = () => {
                 <span className="text-xs text-slate-500">United Kingdom Only</span>
               </div>
 
+              {/* Saved Address Picker for logged-in users */}
+              {savedAddresses.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-blue-600" /> Choose a saved delivery address:
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {savedAddresses.map((addr) => {
+                      const isSelected = selectedAddressId === (addr.id || 'saved');
+                      return (
+                        <button
+                          key={addr.id || `${addr.postcode}-${addr.addressLine1}`}
+                          type="button"
+                          onClick={() => applySavedAddress(addr)}
+                          className={`text-left p-3 rounded-xl border text-xs transition-all ${
+                            isSelected
+                              ? 'border-blue-600 bg-blue-50/70 ring-1 ring-blue-600'
+                              : 'border-slate-200 hover:border-slate-300 bg-white'
+                          }`}
+                        >
+                          <div className="font-bold text-slate-900 flex items-center justify-between">
+                            <span>{addr.label || 'Saved Address'}</span>
+                            {addr.isDefault && (
+                              <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">
+                                Default
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-slate-600 mt-1 truncate">{addr.recipientName}</div>
+                          <div className="text-slate-500 truncate">
+                            {addr.addressLine1}, {addr.city} {addr.postcode}
+                          </div>
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedAddressId('new');
+                        setAddressLine1('');
+                        setAddressLine2('');
+                        setPostcode('');
+                      }}
+                      className={`text-left p-3 rounded-xl border border-dashed text-xs font-bold flex items-center justify-center ${
+                        selectedAddressId === 'new'
+                          ? 'border-blue-600 bg-blue-50 text-blue-700'
+                          : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      + Enter a New Delivery Address
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Full Name / Recipient *</label>
@@ -257,12 +584,11 @@ export const CheckoutPage: React.FC = () => {
                     className="w-full text-sm p-3 rounded-xl border border-slate-300 focus:border-blue-500 focus:outline-hidden"
                   />
                 </div>
-
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Company / University (Optional)</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Company (Optional)</label>
                   <input
                     type="text"
-                    placeholder="e.g. Dept of Economics"
+                    placeholder="e.g. Clifton Design Studio"
                     value={companyName}
                     onChange={(e) => setCompanyName(e.target.value)}
                     className="w-full text-sm p-3 rounded-xl border border-slate-300 focus:border-blue-500 focus:outline-hidden"
@@ -286,7 +612,7 @@ export const CheckoutPage: React.FC = () => {
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Address Line 2 (Optional)</label>
                 <input
                   type="text"
-                  placeholder="Apartment, suite, unit, flat"
+                  placeholder="Apartment, suite, building"
                   value={addressLine2}
                   onChange={(e) => setAddressLine2(e.target.value)}
                   className="w-full text-sm p-3 rounded-xl border border-slate-300 focus:border-blue-500 focus:outline-hidden"
@@ -295,251 +621,442 @@ export const CheckoutPage: React.FC = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Town / City *</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">City / Town *</label>
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Bristol"
                     value={city}
                     onChange={(e) => setCity(e.target.value)}
                     className="w-full text-sm p-3 rounded-xl border border-slate-300 focus:border-blue-500 focus:outline-hidden"
                   />
                 </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">County (Optional)</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Somerset"
-                    value={county}
-                    onChange={(e) => setCounty(e.target.value)}
-                    className="w-full text-sm p-3 rounded-xl border border-slate-300 focus:border-blue-500 focus:outline-hidden"
-                  />
-                </div>
-
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">UK Postcode *</label>
                   <input
                     type="text"
                     required
-                    placeholder="e.g. BS4 3AA"
+                    placeholder="e.g. BS4 3BS"
                     value={postcode}
-                    onChange={(e) => setPostcode(e.target.value)}
-                    className="w-full text-sm p-3 rounded-xl border border-slate-300 uppercase focus:border-blue-500 focus:outline-hidden"
+                    onChange={(e) => setPostcode(e.target.value.toUpperCase())}
+                    className="w-full text-sm p-3 rounded-xl border border-slate-300 focus:border-blue-500 focus:outline-hidden uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Mobile / Phone *</label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="07700 900123"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    className="w-full text-sm p-3 rounded-xl border border-slate-300 focus:border-blue-500 focus:outline-hidden"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Contact Phone Number *</label>
-                <input
-                  type="tel"
-                  required
-                  placeholder="For courier delivery SMS tracking"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="w-full text-sm p-3 rounded-xl border border-slate-300 focus:border-blue-500 focus:outline-hidden"
-                />
+              {(loggedInUser || createAccount) && selectedAddressId === 'new' && (
+                savedAddresses.length >= 3 ? (
+                  <div className="pt-1 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                    You have reached the maximum of 3 saved addresses. To save this new address permanently, edit or delete an existing one in{' '}
+                    <Link to="/account" className="font-bold underline">My Account</Link>.
+                  </div>
+                ) : (
+                  <div className="pt-1 flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={saveNewAddress}
+                        onChange={(e) => setSaveNewAddress(e.target.checked)}
+                        className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4"
+                      />
+                      Save this address to my address book ({savedAddresses.length}/3)
+                    </label>
+                    {saveNewAddress && (
+                      <input
+                        type="text"
+                        placeholder="Label (e.g. Studio, Office)"
+                        value={newAddressLabel}
+                        onChange={(e) => setNewAddressLabel(e.target.value)}
+                        className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-300 focus:border-blue-500 focus:outline-hidden"
+                      />
+                    )}
+                  </div>
+                )
+              )}
+
+              {/* Billing Address Toggle */}
+              <div className="pt-3 border-t border-slate-100 space-y-3">
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700 select-none">
+                  <input
+                    type="checkbox"
+                    checked={billingSameAsDelivery}
+                    onChange={(e) => setBillingSameAsDelivery(e.target.checked)}
+                    className="rounded text-blue-600 focus:ring-blue-500 w-4 h-4"
+                  />
+                  Billing address is the same as delivery address
+                </label>
+
+                {!billingSameAsDelivery && (
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                    <p className="text-xs font-bold text-slate-800 uppercase tracking-wider">Billing Address Details</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <input
+                        type="text"
+                        required
+                        placeholder="Billing Name *"
+                        value={billingRecipientName}
+                        onChange={(e) => setBillingRecipientName(e.target.value)}
+                        className="w-full text-xs p-2.5 rounded-lg border border-slate-300 bg-white"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Company Name (Optional)"
+                        value={billingCompanyName}
+                        onChange={(e) => setBillingCompanyName(e.target.value)}
+                        className="w-full text-xs p-2.5 rounded-lg border border-slate-300 bg-white"
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Billing Address Line 1 *"
+                      value={billingAddressLine1}
+                      onChange={(e) => setBillingAddressLine1(e.target.value)}
+                      className="w-full text-xs p-2.5 rounded-lg border border-slate-300 bg-white"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Billing Address Line 2 (Optional)"
+                      value={billingAddressLine2}
+                      onChange={(e) => setBillingAddressLine2(e.target.value)}
+                      className="w-full text-xs p-2.5 rounded-lg border border-slate-300 bg-white"
+                    />
+                    <div className="grid grid-cols-2 gap-3">
+                      <input
+                        type="text"
+                        required
+                        placeholder="City *"
+                        value={billingCity}
+                        onChange={(e) => setBillingCity(e.target.value)}
+                        className="w-full text-xs p-2.5 rounded-lg border border-slate-300 bg-white"
+                      />
+                      <input
+                        type="text"
+                        required
+                        placeholder="Postcode *"
+                        value={billingPostcode}
+                        onChange={(e) => setBillingPostcode(e.target.value.toUpperCase())}
+                        className="w-full text-xs p-2.5 rounded-lg border border-slate-300 bg-white uppercase"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* 3. Payment Method */}
+            {/* 3. UK Delivery Option */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">
+                3. Delivery Method
+              </h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShippingMethod('standard')}
+                  className={`p-3.5 rounded-xl border text-left transition-all ${
+                    shippingMethod === 'standard'
+                      ? 'border-blue-600 bg-blue-50/70 ring-1 ring-blue-600'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-900">
+                    <span>Standard Tracked UK</span>
+                    <span>
+                      {jobData.isQuoteOrder || pricingSummary.subtotal - pricingSummary.discount >= 30
+                        ? 'FREE'
+                        : '£3.50'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    2–3 working days via Royal Mail / studio dispatch (Free over £30)
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShippingMethod('express')}
+                  className={`p-3.5 rounded-xl border text-left transition-all ${
+                    shippingMethod === 'express'
+                      ? 'border-blue-600 bg-blue-50/70 ring-1 ring-blue-600'
+                      : 'border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-bold text-slate-900">
+                    <span>Express Next Working Day</span>
+                    <span>£6.99</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Priority same-day press queue & next working day courier
+                  </p>
+                </button>
+              </div>
+            </div>
+
+            {/* 4. Payment Method */}
             <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">
-                  3. Payment Method
+                  4. Payment Method
                 </h2>
-                <div className="flex items-center gap-1.5 text-xs text-emerald-600 font-semibold">
-                  <Lock className="w-3.5 h-3.5" /> 256-bit Encrypted
+                <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full">
+                  <Lock className="w-3 h-3" /> 256-bit SSL Encrypted
                 </div>
               </div>
 
-              <div className="space-y-3">
-                <label
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
                   onClick={() => setPaymentMethod('stripe')}
-                  className={`flex items-center justify-between p-4 rounded-xl border cursor-pointer transition-all ${
+                  className={`p-4 rounded-xl border text-left transition-all flex items-center justify-between ${
                     paymentMethod === 'stripe'
-                      ? 'border-blue-600 bg-blue-50/50 ring-1 ring-blue-600'
+                      ? 'border-blue-600 bg-blue-50/70 ring-1 ring-blue-600'
                       : 'border-slate-200 hover:border-slate-300'
                   }`}
                 >
-                  <div className="flex items-center gap-3">
-                    <CreditCard className="w-5 h-5 text-blue-600" />
-                    <div>
-                      <span className="text-sm font-bold text-slate-900 block">Debit / Credit Card & Apple Pay</span>
-                      <span className="text-xs text-slate-500">Visa, Mastercard, Apple Pay, Google Pay via Stripe</span>
+                  <div>
+                    <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      <CreditCard className="w-4 h-4 text-blue-600" /> Card / Apple Pay / Google Pay
                     </div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">Visa, Mastercard, UK Debit (Stripe)</div>
                   </div>
-                  <input
-                    type="radio"
-                    name="payment"
-                    checked={paymentMethod === 'stripe'}
-                    onChange={() => setPaymentMethod('stripe')}
-                    className="text-blue-600 focus:ring-blue-500"
-                  />
-                </label>
+                </button>
 
-                <label
+                <button
+                  type="button"
                   onClick={() => setPaymentMethod('paypal')}
-                  className={`flex items-center justify-between p-4 rounded-xl border cursor-pointer transition-all ${
+                  className={`p-4 rounded-xl border text-left transition-all flex items-center justify-between ${
                     paymentMethod === 'paypal'
-                      ? 'border-blue-600 bg-blue-50/50 ring-1 ring-blue-600'
+                      ? 'border-blue-600 bg-blue-50/70 ring-1 ring-blue-600'
                       : 'border-slate-200 hover:border-slate-300'
                   }`}
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="w-5 h-5 text-indigo-700 font-black italic">P</div>
-                    <div>
-                      <span className="text-sm font-bold text-slate-900 block">PayPal</span>
-                      <span className="text-xs text-slate-500">Pay directly with your PayPal balance or bank</span>
-                    </div>
+                  <div>
+                    <div className="text-xs font-bold text-slate-900">PayPal Express</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">Pay with PayPal Balance / Bank</div>
                   </div>
-                  <input
-                    type="radio"
-                    name="payment"
-                    checked={paymentMethod === 'paypal'}
-                    onChange={() => setPaymentMethod('paypal')}
-                    className="text-blue-600 focus:ring-blue-500"
-                  />
-                </label>
+                </button>
+              </div>
 
-                {/* Card input details for Stripe */}
-                {paymentMethod === 'stripe' && (
-                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-                    <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-                      <span>Card Details</span>
-                      <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded font-mono">
-                        Test Mode Active
-                      </span>
-                    </div>
-
+              {paymentMethod === 'stripe' ? (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3 mt-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Card Number</label>
+                    <input
+                      type="text"
+                      placeholder="4242 4242 4242 4242"
+                      value={cardNumber}
+                      onChange={(e) => setCardNumber(e.target.value)}
+                      className="w-full text-sm p-2.5 rounded-lg border border-slate-300 bg-white font-mono"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Card Number</label>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Expiry Date</label>
                       <input
                         type="text"
-                        placeholder="4242 •••• •••• 4242"
-                        value={cardNumber}
-                        onChange={(e) => setCardNumber(e.target.value)}
-                        className="w-full text-xs font-mono p-2.5 bg-white rounded-lg border border-slate-300 focus:border-blue-500 focus:outline-hidden"
+                        placeholder="MM / YY"
+                        value={cardExpiry}
+                        onChange={(e) => setCardExpiry(e.target.value)}
+                        className="w-full text-sm p-2.5 rounded-lg border border-slate-300 bg-white font-mono"
                       />
                     </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Expiry Date</label>
-                        <input
-                          type="text"
-                          placeholder="MM/YY"
-                          value={cardExpiry}
-                          onChange={(e) => setCardExpiry(e.target.value)}
-                          className="w-full text-xs font-mono p-2.5 bg-white rounded-lg border border-slate-300 focus:border-blue-500 focus:outline-hidden"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">CVC / CVV</label>
-                        <input
-                          type="text"
-                          placeholder="123"
-                          value={cardCvc}
-                          onChange={(e) => setCardCvc(e.target.value)}
-                          className="w-full text-xs font-mono p-2.5 bg-white rounded-lg border border-slate-300 focus:border-blue-500 focus:outline-hidden"
-                        />
-                      </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">CVC</label>
+                      <input
+                        type="text"
+                        placeholder="123"
+                        value={cardCvc}
+                        onChange={(e) => setCardCvc(e.target.value)}
+                        className="w-full text-sm p-2.5 rounded-lg border border-slate-300 bg-white font-mono"
+                      />
                     </div>
                   </div>
-                )}
-
-                {errorMessage && (
-                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>{errorMessage}</span>
-                  </div>
-                )}
-              </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                  Clicking <span className="font-bold">Complete Order</span> will create your PayPal transaction and immediately mark the order for studio production in this environment.
+                </div>
+              )}
             </div>
-
           </div>
 
-          {/* Right Column: Order Summary (5 cols) */}
-          <div className="lg:col-span-5 sticky top-28 space-y-4">
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-md space-y-6">
-              <h3 className="text-base font-extrabold text-slate-900 border-b border-slate-100 pb-4">
-                Order Review
-              </h3>
+          {/* Right Column: Order Review (5 cols) */}
+          <div className="lg:col-span-5">
+            <div className="sticky top-24 bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-5">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">
+                Order Review ({jobData.files?.length || 1} {jobData.files?.length === 1 ? 'File' : 'Files'})
+              </h2>
 
-              {/* Item Card */}
-              <div className="flex items-start gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200/60">
-                <div className="w-9 h-11 bg-blue-100 text-blue-700 rounded flex items-center justify-center shrink-0">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div className="flex-1 overflow-hidden">
-                  <h4 className="text-xs font-bold text-slate-900 truncate">
-                    {jobData.files[0]?.name || 'Document Print Job'}
-                  </h4>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    {jobData.config.copies} {jobData.config.copies > 1 ? 'copies' : 'copy'} • {jobData.config.paperSize} ({jobData.config.paperWeight}) • {jobData.config.colorMode === 'color' ? 'Colour' : 'B&W'} • {jobData.config.bindingType.toUpperCase()}
-                  </p>
-                </div>
-                <div className="text-xs font-black text-slate-900">
-                  {formatGBP(jobData.pricing.subtotal)}
-                </div>
-              </div>
-
-              {/* Cost Breakdown */}
-              <div className="space-y-2 text-xs border-t border-slate-200 pt-4">
-                <div className="flex justify-between text-slate-600">
-                  <span>Printing & Materials:</span>
-                  <span className="font-semibold text-slate-900">{formatGBP(jobData.pricing.subtotal)}</span>
-                </div>
-
-                <div className="flex justify-between text-slate-600">
-                  <span>UK Courier Delivery ({jobData.pricing.shippingMethod.toUpperCase()}):</span>
-                  <span className="font-semibold text-slate-900">
-                    {jobData.pricing.shippingFee === 0 ? (
-                      <span className="text-emerald-600">FREE</span>
-                    ) : (
-                      formatGBP(jobData.pricing.shippingFee)
+              {/* Uploaded Files List */}
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {(jobData.files || []).map((file: any, idx: number) => (
+                  <div key={file.id || idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-slate-900 truncate">{file.name}</div>
+                        <div className="text-[11px] text-slate-500">
+                          {file.pageCount || file.pages || '?'} pages
+                        </div>
+                      </div>
+                    </div>
+                    {file.id && (
+                      <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                        Ready
+                      </span>
                     )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Job Specs Card */}
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
+                <div className="font-bold text-slate-900">Print Specifications</div>
+                <div className="text-slate-600">
+                  {jobData.config?.paperSize} • {jobData.config?.paperType} •{' '}
+                  {jobData.config?.colorMode === 'bw' ? 'B&W' : 'Full Colour'}
+                </div>
+                <div className="text-slate-500">
+                  {jobData.config?.sides === 'double' ? 'Double-sided' : 'Single-sided'} •{' '}
+                  {jobData.config?.pagesPerSheet || 1} page/sheet •{' '}
+                  {jobData.config?.orientation || 'auto'} • {jobData.config?.copies || 1} copy/copies
+                </div>
+                {jobData.config?.binding !== 'none' && (
+                  <div className="text-blue-700 font-semibold capitalize">
+                    Finishing: {jobData.config?.binding}
+                    {jobData.config?.frontCover ? ' + Front Cover' : ''}
+                    {jobData.config?.backCover ? ' + Back Cover' : ''}
+                  </div>
+                )}
+              </div>
+
+              {/* Coupon Code Input */}
+              {!jobData.isQuoteOrder && (
+                <div className="space-y-2 pt-1">
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-slate-500" /> Promo / Coupon Code
+                  </label>
+                  {appliedCouponCode ? (
+                    <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-xs">
+                      <span className="font-bold text-emerald-800">
+                        {appliedCouponCode} applied (-{formatGBP(pricingSummary.discount)})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleRemoveCoupon}
+                        className="text-slate-500 hover:text-red-600"
+                        title="Remove coupon"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="e.g. BRISTOL10"
+                        value={couponInput}
+                        onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                        className="flex-1 text-xs p-2.5 rounded-xl border border-slate-300 uppercase focus:border-blue-500 focus:outline-hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleApplyCoupon}
+                        disabled={isApplyingCoupon || !couponInput.trim()}
+                        className="px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        {isApplyingCoupon ? 'Checking...' : 'Apply'}
+                      </button>
+                    </div>
+                  )}
+                  {couponMessage && <p className="text-xs font-semibold text-emerald-700">{couponMessage}</p>}
+                  {couponError && <p className="text-xs font-semibold text-red-600">{couponError}</p>}
+                </div>
+              )}
+
+              {/* Totals */}
+              <div className="space-y-2.5 text-xs border-t border-slate-100 pt-4">
+                <div className="flex justify-between text-slate-600">
+                  <span>{jobData.isQuoteOrder ? 'Approved Quote Price' : 'Print Subtotal (inc. VAT)'}</span>
+                  <span className="font-semibold text-slate-900">{formatGBP(pricingSummary.subtotal)}</span>
+                </div>
+                {pricingSummary.discount > 0 && (
+                  <div className="flex justify-between text-emerald-600 font-semibold">
+                    <span>Discount ({appliedCouponCode})</span>
+                    <span>-{formatGBP(pricingSummary.discount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-slate-600">
+                  <span>UK Delivery ({shippingMethod === 'express' ? 'Express Courier' : 'Standard'})</span>
+                  <span className="font-semibold text-slate-900">
+                    {pricingSummary.shippingCost === 0 ? 'FREE' : formatGBP(pricingSummary.shippingCost)}
                   </span>
                 </div>
-
-                <div className="border-t border-slate-200 pt-3 flex justify-between items-baseline">
-                  <div>
-                    <span className="text-base font-extrabold text-slate-900 block">Total Due</span>
-                    <span className="text-[10px] text-slate-400">Includes all UK VAT and packaging</span>
-                  </div>
+                <div className="pt-3 border-t border-slate-100 flex justify-between items-baseline">
+                  <span className="text-sm font-bold text-slate-900">Total to Pay</span>
                   <span className="text-2xl font-black text-blue-600">
-                    {formatGBP(jobData.pricing.grandTotal)}
+                    {formatGBP(pricingSummary.totalPayable)}
                   </span>
                 </div>
               </div>
+
+              {/* Terms Acceptance */}
+              <label className="flex items-start gap-2.5 cursor-pointer text-xs text-slate-600 pt-1">
+                <input
+                  type="checkbox"
+                  checked={acceptedTerms}
+                  onChange={(e) => setAcceptedTerms(e.target.checked)}
+                  className="mt-0.5 rounded text-blue-600 focus:ring-blue-500 w-4 h-4 shrink-0"
+                />
+                <span>
+                  I confirm that my PDF layout is ready for print and accept BS4 Copy & Print&apos;s production and UK delivery terms.
+                </span>
+              </label>
+
+              {/* Error Alert */}
+              {errorMessage && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-semibold flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
 
               {/* Submit CTA */}
               <button
                 type="submit"
-                disabled={isSubmitting}
-                className="w-full py-4 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-md shadow-blue-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                disabled={isProcessing}
+                className="w-full py-4 px-6 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-700 transition-all shadow-md shadow-blue-500/20 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                {isSubmitting ? (
+                {isProcessing ? (
                   <>
-                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                    <span>{processingStep || 'Processing Order...'}</span>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    {paymentStep === 'processing'
+                      ? 'Submitting Order & Processing...'
+                      : 'Finalising Payment...'}
                   </>
                 ) : (
                   <>
-                    <Lock className="w-4 h-4" />
-                    <span>Pay {formatGBP(jobData.pricing.grandTotal)} & Print</span>
+                    <CheckCircle2 className="w-4 h-4" /> Complete Order • {formatGBP(pricingSummary.totalPayable)}
                   </>
                 )}
               </button>
 
-              <div className="text-[11px] text-slate-400 text-center space-y-1">
-                <p>By placing this order you agree to our Terms of Print Service.</p>
-                <p>Commercial in-house dispatch within 24 business hours.</p>
+              <div className="flex items-center justify-center gap-4 text-[11px] text-slate-500 pt-2">
+                <span className="flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> Money-back print guarantee</span>
+                <span className="flex items-center gap-1"><Truck className="w-3.5 h-3.5 text-blue-600" /> Tracked UK Mail</span>
               </div>
             </div>
           </div>
-
         </form>
       </div>
     </div>
