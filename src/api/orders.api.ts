@@ -1,25 +1,34 @@
 import apiClient from './client';
 
 export interface CreateOrderPayload {
+  quoteId?: string;
   customerEmail: string;
   customerFirstName: string;
   customerLastName: string;
+  customerName?: string;
   customerPhone?: string;
+  createAccount?: boolean;
+  password?: string;
   shippingMethod: 'standard' | 'express';
   shippingAddress: {
+    recipientName: string;
+    companyName?: string;
     addressLine1: string;
     addressLine2?: string;
     city: string;
+    county?: string;
     postcode: string;
     country?: string;
+    phone?: string;
   };
   billingAddress?: any;
   couponCode?: string;
+  paymentProvider?: 'stripe' | 'paypal';
   items: Array<{
-    documentFileId?: string;
     jobName: string;
     copies: number;
-    printConfiguration: any;
+    fileIds: string[];
+    config: any;
   }>;
 }
 
@@ -36,6 +45,12 @@ export const ordersApi = {
     return res.data.data;
   },
 
+  // Authenticated customer: get own order history
+  getMyOrders: async (): Promise<any[]> => {
+    const res = await apiClient.get('/orders/my-orders');
+    return res.data.data || [];
+  },
+
   // Admin: List all orders with status/search filters
   listAdminOrders: async (params?: { status?: string; search?: string }): Promise<any[]> => {
     const res = await apiClient.get('/admin/orders', { params });
@@ -43,8 +58,8 @@ export const ordersApi = {
   },
 
   // Admin: Update order status (paid, in_production, printed, dispatched, etc.)
-  updateOrderStatus: async (orderId: string, status: string): Promise<any> => {
-    const res = await apiClient.patch(`/admin/orders/${orderId}/status`, { status });
+  updateOrderStatus: async (orderId: string, status: string, trackingNumber?: string): Promise<any> => {
+    const res = await apiClient.patch(`/admin/orders/${orderId}/status`, { status, trackingNumber });
     return res.data.data;
   },
 

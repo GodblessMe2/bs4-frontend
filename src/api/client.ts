@@ -12,13 +12,18 @@ export const apiClient: AxiosInstance = axios.create({
   },
 });
 
-// Request Interceptor: Attach authentication tokens automatically
+// Request Interceptor: Attach authentication tokens cleanly based on route context
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // Check for admin token first, then customer token
     const adminToken = localStorage.getItem('bs4_admin_token');
     const customerToken = localStorage.getItem('bs4_token');
-    const token = adminToken || customerToken;
+    const url = config.url || '';
+    const isAdminContext =
+      window.location.pathname.startsWith('/admin') ||
+      url.startsWith('/admin') ||
+      url.includes('/admin/');
+
+    const token = isAdminContext ? adminToken : customerToken;
 
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`;
