@@ -10,7 +10,10 @@ import {
   Printer, 
   Calendar, 
   Layers, 
-  Sparkles 
+  Sparkles,
+  FileText,
+  ExternalLink,
+  Phone,
 } from 'lucide-react';
 import { formatGBP } from '../lib/utils';
 import { quotesApi } from '../api';
@@ -192,37 +195,131 @@ export const QuoteViewPage: React.FC = () => {
           {/* Specifications Breakdown */}
           <div className="space-y-3 pt-2">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              Job Specifications
+              Job Specifications &amp; Customer Brief
             </h3>
 
-            <div className="bg-slate-50 rounded-xl p-4 text-xs space-y-2.5 border border-slate-200/60">
-              <div className="flex justify-between">
+            <div className="bg-slate-50 rounded-xl p-4 text-xs grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5 border border-slate-200/60">
+              <div className="flex justify-between gap-2">
                 <span className="text-slate-500">Service:</span>
-                <span className="font-bold text-slate-900 capitalize">{quote.serviceCategory.replace('_', ' ')}</span>
+                <span className="font-bold text-slate-900 capitalize">{quote.serviceCategory.replace(/_/g, ' ')}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-2">
                 <span className="text-slate-500">Quantity / Copies:</span>
                 <span className="font-bold text-slate-900">{quote.quantity}</span>
               </div>
               {quote.specifications?.paperSize && (
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-2">
                   <span className="text-slate-500">Paper Format:</span>
-                  <span className="font-bold text-slate-900">{quote.specifications.paperSize} ({quote.specifications.paperWeight})</span>
+                  <span className="font-bold text-slate-900">{quote.specifications.paperSize} ({quote.specifications.paperWeight || 'Standard'})</span>
                 </div>
               )}
               {quote.specifications?.colorMode && (
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-2">
                   <span className="text-slate-500">Colour:</span>
                   <span className="font-bold text-slate-900">{quote.specifications.colorMode === 'color' ? 'Full Colour' : 'Black & White'}</span>
                 </div>
               )}
+              {(quote.specifications?.printSides || quote.specifications?.sides) && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Print Sides:</span>
+                  <span className="font-bold text-slate-900 capitalize">
+                    {quote.specifications.printSides || quote.specifications.sides}
+                  </span>
+                </div>
+              )}
+              {quote.specifications?.pagesPerSheet && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Layout / Orientation:</span>
+                  <span className="font-bold text-slate-900 capitalize">
+                    {quote.specifications.pagesPerSheet} / sheet • {quote.specifications.orientation || 'auto'}
+                  </span>
+                </div>
+              )}
               {quote.specifications?.bindingType && (
-                <div className="flex justify-between">
+                <div className="flex justify-between gap-2">
                   <span className="text-slate-500">Binding:</span>
-                  <span className="font-bold text-slate-900 uppercase">{quote.specifications.bindingType}</span>
+                  <span className="font-bold text-slate-900 capitalize">{quote.specifications.bindingType.replace(/_/g, ' ')}</span>
+                </div>
+              )}
+              {(quote.specifications?.frontCover && quote.specifications.frontCover !== 'none') ||
+              (quote.specifications?.backCover && quote.specifications.backCover !== 'none') ? (
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Covers:</span>
+                  <span className="font-bold text-slate-900 capitalize">
+                    Front: {quote.specifications.frontCover || 'none'} / Back: {quote.specifications.backCover || 'none'}
+                  </span>
+                </div>
+              ) : null}
+              {quote.specifications?.totalRawPages && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Document Volume:</span>
+                  <span className="font-bold text-slate-900">
+                    {quote.specifications.totalRawPages} pages • {quote.specifications.totalPrintedSides || '?'} sides • {quote.specifications.totalSheets || quote.specifications.physicalSheets || '?'} sheets
+                  </span>
+                </div>
+              )}
+              {quote.specifications?.preferredDeadline && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Preferred Deadline:</span>
+                  <span className="font-bold text-blue-700">{quote.specifications.preferredDeadline}</span>
+                </div>
+              )}
+              {quote.customerPhone && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500 flex items-center gap-1"><Phone className="w-3 h-3" /> Phone:</span>
+                  <span className="font-bold text-slate-900">{quote.customerPhone}</span>
                 </div>
               )}
             </div>
+
+            {quote.customerNotes && (
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/70 text-xs">
+                <span className="font-bold text-slate-700 block mb-0.5">Submitted Requirements &amp; Finishing Notes:</span>
+                <p className="text-slate-600">{quote.customerNotes}</p>
+              </div>
+            )}
+
+            {/* Uploaded Documents */}
+            {Array.isArray(quote.fileUrls) && quote.fileUrls.length > 0 && (
+              <div className="space-y-2 pt-1">
+                <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  Uploaded Print Artwork ({quote.fileUrls.length})
+                </h4>
+                <div className="space-y-2">
+                  {quote.fileUrls.map((f: any, idx: number) => {
+                    const docUrl = f.url || f.secureUrl || '';
+                    return (
+                      <div
+                        key={f.id || idx}
+                        className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3 text-xs"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+                          <div className="min-w-0">
+                            <div className="font-bold text-slate-900 truncate">{f.name || `Document_${idx + 1}.pdf`}</div>
+                            {f.pageCount && (
+                              <div className="text-[11px] text-slate-500">{f.pageCount} pages</div>
+                            )}
+                          </div>
+                        </div>
+                        {docUrl ? (
+                          <a
+                            href={docUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] shrink-0"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" /> View Document
+                          </a>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 italic">File stored without preview link</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Customer Action */}

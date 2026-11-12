@@ -5,3 +5,4 @@ export * from './orders.api';
 export * from './quotes.api';
 export * from './coupons.api';
 export * from './documents.api';
+export * from './payments.api';

@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { loadStripe, Stripe } from '@stripe/stripe-js';
+import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import {
   ShieldCheck,
   CreditCard,
@@ -17,7 +19,81 @@ import {
   X,
 } from 'lucide-react';
 import { formatGBP } from '../lib/utils';
-import { authApi, ordersApi, couponsApi, SavedAddressItem } from '../api';
+import {
+  authApi,
+  ordersApi,
+  couponsApi,
+  paymentsApi,
+  SavedAddressItem,
+  PublicPaymentConfig,
+} from '../api';
+
+declare global {
+  interface Window {
+    paypal?: any;
+  }
+}
+
+const detectCardBrand = (digits: string): string => {
+  const clean = digits.replace(/\D/g, '');
+  if (clean.startsWith('4')) return 'Visa';
+  if (/^5[1-5]/.test(clean) || /^2[2-7]/.test(clean)) return 'Mastercard';
+  if (/^3[47]/.test(clean)) return 'Amex';
+  return 'Visa';
+};
+
+const StripeLiveConfirmBridge: React.FC<{
+  registerConfirmFn: (fn: ((clientSecret: string, billingName: string, billingEmail: string) => Promise<{ paymentIntentId: string }>) | null) => void;
+}> = ({ registerConfirmFn }) => {
+  const stripe = useStripe();
+  const elements = useElements();
+
+  useEffect(() => {
+    if (!stripe || !elements) {
+      registerConfirmFn(null);
+      return;
+    }
+
+    registerConfirmFn(async (clientSecret: string, billingName: string, billingEmail: string) => {
+      const cardElement = elements.getElement(CardElement);
+      if (!cardElement) {
+        throw new Error('Card input is not ready yet.');
+      }
+      const { error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+        payment_method: {
+          card: cardElement,
+          billing_details: { name: billingName, email: billingEmail },
+        },
+      });
+      if (error) {
+        throw new Error(error.message || 'Stripe card authorisation failed.');
+      }
+      if (!paymentIntent || paymentIntent.status !== 'succeeded') {
+        throw new Error(`Unexpected payment status: ${paymentIntent?.status || 'unknown'}`);
+      }
+      return { paymentIntentId: paymentIntent.id };
+    });
+
+    return () => registerConfirmFn(null);
+  }, [stripe, elements, registerConfirmFn]);
+
+  return (
+    <div className="p-3.5 rounded-lg border border-slate-300 bg-white">
+      <CardElement
+        options={{
+          hidePostalCode: true,
+          style: {
+            base: {
+              fontSize: '14px',
+              color: '#0f172a',
+              '::placeholder': { color: '#94a3b8' },
+            },
+          },
+        }}
+      />
+    </div>
+  );
+};
 
 export const CheckoutPage: React.FC = () => {
   const navigate = useNavigate();
@@ -75,10 +151,29 @@ export const CheckoutPage: React.FC = () => {
 
   // Payment & Terms
   const [paymentMethod, setPaymentMethod] = useState<'stripe' | 'paypal'>('stripe');
+  const [paymentConfig, setPaymentConfig] = useState<PublicPaymentConfig | null>(null);
+  const [stripePromise, setStripePromise] = useState<Promise<Stripe | null> | null>(null);
+  const stripeConfirmRef = useRef<
+    ((clientSecret: string, billingName: string, billingEmail: string) => Promise<{ paymentIntentId: string }>) | null
+  >(null);
+  const paypalContainerRef = useRef<HTMLDivElement | null>(null);
+  const [paypalSdkReady, setPaypalSdkReady] = useState(false);
+  const [paypalSdkError, setPaypalSdkError] = useState<string | null>(null);
   const [cardNumber, setCardNumber] = useState('');
   const [cardExpiry, setCardExpiry] = useState('');
   const [cardCvc, setCardCvc] = useState('');
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+
+  const registerStripeConfirm = useCallback(
+    (
+      fn:
+        | ((clientSecret: string, billingName: string, billingEmail: string) => Promise<{ paymentIntentId: string }>)
+        | null
+    ) => {
+      stripeConfirmRef.current = fn;
+    },
+    []
+  );
 
   // Submission state
   const [isProcessing, setIsProcessing] = useState(false);
@@ -154,7 +249,52 @@ export const CheckoutPage: React.FC = () => {
       }
       loadCustomerAddresses();
     }
+
+    paymentsApi
+      .getConfig()
+      .then((cfg) => {
+        setPaymentConfig(cfg);
+        if (cfg.stripeLiveElements && cfg.stripePublishableKey) {
+          setStripePromise(loadStripe(cfg.stripePublishableKey));
+        }
+      })
+      .catch(() => {
+        // Fallback silently to test mode defaults
+      });
   }, [navigate]);
+
+  useEffect(() => {
+    if (paymentMethod !== 'paypal' || !paymentConfig?.paypalClientId) {
+      return;
+    }
+
+    if (window.paypal) {
+      setPaypalSdkReady(true);
+      return;
+    }
+
+    const scriptId = 'bs4-paypal-sdk-script';
+    const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener('load', () => setPaypalSdkReady(true));
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.id = scriptId;
+    script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(
+      paymentConfig.paypalClientId
+    )}&currency=GBP&intent=capture`;
+    script.async = true;
+    script.onload = () => {
+      setPaypalSdkReady(true);
+      setPaypalSdkError(null);
+    };
+    script.onerror = () => {
+      setPaypalSdkError('Unable to load live PayPal popup SDK in this browser. You can still test PayPal Sandbox order creation below.');
+    };
+    document.body.appendChild(script);
+  }, [paymentMethod, paymentConfig?.paypalClientId]);
 
   // Live financial summary calculation
   const pricingSummary = useMemo(() => {
@@ -244,41 +384,40 @@ export const CheckoutPage: React.FC = () => {
     setCouponError(null);
   };
 
-  const handlePlaceOrder = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage(null);
-
+  const validateBeforeOrder = (requireStripeInputs: boolean): string | null => {
+    if (!email.trim() || !email.includes('@')) {
+      return 'Please enter a valid email address.';
+    }
     if (!recipientName || !addressLine1 || !city || !postcode || !phone) {
-      setErrorMessage('Please fill in all required UK delivery fields.');
-      return;
+      return 'Please fill in all required UK delivery fields.';
     }
     if (!billingSameAsDelivery && (!billingRecipientName || !billingAddressLine1 || !billingCity || !billingPostcode)) {
-      setErrorMessage('Please complete your UK billing address fields.');
-      return;
+      return 'Please complete your UK billing address fields.';
     }
     if (!acceptedTerms) {
-      setErrorMessage('Please accept the Print Production & Delivery Terms before paying.');
-      return;
+      return 'Please accept the Print Production & Delivery Terms before paying.';
     }
     if (!loggedInUser && createAccount && password.length < 6) {
-      setErrorMessage('Password must be at least 6 characters to create an account.');
-      return;
+      return 'Password must be at least 6 characters to create an account.';
     }
-    if (paymentMethod === 'stripe' && (!cardNumber.trim() || !cardExpiry.trim() || !cardCvc.trim())) {
-      setErrorMessage('Please enter your card details or switch to PayPal.');
-      return;
+    if (
+      requireStripeInputs &&
+      !paymentConfig?.stripeLiveElements &&
+      (!cardNumber.trim() || !cardExpiry.trim() || !cardCvc.trim())
+    ) {
+      return 'Please enter your test card details or switch to PayPal.';
     }
+    const uploadedFileIds =
+      jobData?.files?.map((f: any) => f.id || f.serverFileId).filter(Boolean) || [];
+    if (!jobData?.isQuoteOrder && uploadedFileIds.length === 0) {
+      return 'Your uploaded PDF session has expired or contains no server files. Please re-upload your PDF in the Copy Shop.';
+    }
+    return null;
+  };
 
+  const createPendingOrderOnServer = async (provider: 'stripe' | 'paypal') => {
     const uploadedFileIds =
       jobData.files?.map((f: any) => f.id || f.serverFileId).filter(Boolean) || [];
-
-    if (!jobData.isQuoteOrder && uploadedFileIds.length === 0) {
-      setErrorMessage('Your uploaded PDF session has expired or contains no server files. Please re-upload your PDF in the Copy Shop.');
-      return;
-    }
-
-    setIsProcessing(true);
-    setPaymentStep('processing');
 
     const deliveryAddressObj = {
       recipientName,
@@ -327,52 +466,203 @@ export const CheckoutPage: React.FC = () => {
           config: jobData.config,
         },
       ],
-      paymentProvider: paymentMethod,
+      paymentProvider: provider,
     };
+
+    const data = await ordersApi.createOrder(orderPayload);
+    const placedOrder = data.order || data;
+
+    if (data.userToken) {
+      localStorage.setItem('bs4_token', data.userToken);
+      localStorage.setItem(
+        'bs4_user',
+        JSON.stringify({
+          id: placedOrder.userId,
+          email: email.trim(),
+          firstName: orderPayload.customerFirstName,
+          lastName: orderPayload.customerLastName,
+          phone,
+          role: 'customer',
+        })
+      );
+      window.dispatchEvent(new Event('bs4-auth-change'));
+    }
+
+    if ((loggedInUser || data.userToken) && selectedAddressId === 'new' && saveNewAddress) {
+      try {
+        await authApi.saveAddress({
+          label: newAddressLabel.trim() || 'Delivery Address',
+          ...deliveryAddressObj,
+          isDefault: savedAddresses.length === 0,
+        });
+      } catch {
+        // Non-fatal
+      }
+    }
+
+    return {
+      placedOrder,
+      clientSecret: data.clientSecret as string | null,
+      paymentIntentId: data.paymentIntentId as string | null,
+    };
+  };
+
+  const finalizeOrderNavigation = (paidOrder: any, orderNumberFallback: string) => {
+    sessionStorage.setItem('bs4_completed_order', JSON.stringify(paidOrder));
+    sessionStorage.removeItem('bs4_current_job');
+    navigate(`/order-confirmation/${paidOrder?.orderNumber || orderNumberFallback}`);
+  };
+
+  const pendingPayPalOrderRef = useRef<{ orderId: string; orderNumber: string } | null>(null);
+  const validateRef = useRef(validateBeforeOrder);
+  const createOrderRef = useRef(createPendingOrderOnServer);
+  validateRef.current = validateBeforeOrder;
+  createOrderRef.current = createPendingOrderOnServer;
+
+  useEffect(() => {
+    if (paymentMethod !== 'paypal' || !paypalSdkReady || !window.paypal || !paypalContainerRef.current) {
+      return;
+    }
+
+    const container = paypalContainerRef.current;
+    container.innerHTML = '';
+
+    const buttons = window.paypal.Buttons({
+      style: {
+        layout: 'vertical',
+        color: 'gold',
+        shape: 'rect',
+        label: 'paypal',
+      },
+      onClick: (_data: any, actions: any) => {
+        const validationError = validateRef.current(false);
+        if (validationError) {
+          setErrorMessage(validationError);
+          return actions.reject();
+        }
+        setErrorMessage(null);
+        return actions.resolve();
+      },
+      createOrder: async () => {
+        setIsProcessing(true);
+        setPaymentStep('processing');
+        try {
+          const { placedOrder } = await createOrderRef.current('paypal');
+          pendingPayPalOrderRef.current = {
+            orderId: placedOrder.id,
+            orderNumber: placedOrder.orderNumber,
+          };
+          const pp = await paymentsApi.createPayPalOrder(placedOrder.id);
+          return pp.paypalOrderId;
+        } catch (err: any) {
+          setErrorMessage(err.response?.data?.message || err.message || 'Unable to initialise PayPal order.');
+          setIsProcessing(false);
+          setPaymentStep('form');
+          throw err;
+        }
+      },
+      onApprove: async (data: any) => {
+        setPaymentStep('redirecting');
+        try {
+          const target = pendingPayPalOrderRef.current;
+          if (!target) {
+            throw new Error('Order session reference was lost.');
+          }
+          const paidOrder = await paymentsApi.capturePayPalOrder(target.orderId, data.orderID);
+          finalizeOrderNavigation(paidOrder, target.orderNumber);
+        } catch (err: any) {
+          setErrorMessage(err.response?.data?.message || err.message || 'PayPal capture failed.');
+          setIsProcessing(false);
+          setPaymentStep('form');
+        }
+      },
+      onCancel: () => {
+        setIsProcessing(false);
+        setPaymentStep('form');
+        setErrorMessage('PayPal payment popup was closed before approval.');
+      },
+      onError: (err: any) => {
+        setIsProcessing(false);
+        setPaymentStep('form');
+        setErrorMessage(err?.message || 'PayPal checkout encountered an error.');
+      },
+    });
+
+    if (buttons.isEligible()) {
+      buttons.render(container).catch(() => {
+        setPaypalSdkError('PayPal button could not render cleanly in this view.');
+      });
+    }
+
+    return () => {
+      container.innerHTML = '';
+    };
+  }, [paymentMethod, paypalSdkReady, pricingSummary.totalPayable]);
+
+  const handlePlaceOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+
+    const validationError = validateBeforeOrder(paymentMethod === 'stripe');
+    if (validationError) {
+      setErrorMessage(validationError);
+      return;
+    }
+
+    setIsProcessing(true);
+    setPaymentStep('processing');
 
     try {
       // 1. Create order in MySQL via backend API
-      const data = await ordersApi.createOrder(orderPayload);
-      const placedOrder = data.order || data;
+      const { placedOrder, clientSecret, paymentIntentId } = await createPendingOrderOnServer(paymentMethod);
 
-      // Save customer JWT if account was created during checkout
-      if (data.userToken) {
-        localStorage.setItem('bs4_token', data.userToken);
-        localStorage.setItem(
-          'bs4_user',
-          JSON.stringify({
-            id: placedOrder.userId,
-            email: email.trim(),
-            firstName: orderPayload.customerFirstName,
-            lastName: orderPayload.customerLastName,
-            phone,
-            role: 'customer',
-          })
-        );
-        window.dispatchEvent(new Event('bs4-auth-change'));
-      }
-
-      // Optionally save new address for logged-in or newly created user
-      if ((loggedInUser || data.userToken) && selectedAddressId === 'new' && saveNewAddress) {
-        try {
-          await authApi.saveAddress({
-            label: newAddressLabel.trim() || 'Delivery Address',
-            ...deliveryAddressObj,
-            isDefault: savedAddresses.length === 0,
-          });
-        } catch {
-          // Non-fatal if address saving fails
-        }
-      }
-
-      // 2. Confirm / Process Payment in MySQL
       setPaymentStep('redirecting');
-      const paidOrder = await ordersApi.confirmPayment(placedOrder.id);
 
-      // 3. Persist completed order summary locally for Confirmation view
-      sessionStorage.setItem('bs4_completed_order', JSON.stringify(paidOrder || placedOrder));
-      sessionStorage.removeItem('bs4_current_job');
-      navigate(`/order-confirmation/${placedOrder.orderNumber}`);
+      if (paymentMethod === 'stripe') {
+        if (paymentConfig?.stripeLiveElements && stripeConfirmRef.current && clientSecret) {
+          const { paymentIntentId: confirmedId } = await stripeConfirmRef.current(
+            clientSecret,
+            recipientName,
+            email.trim()
+          );
+          const paidOrder = await paymentsApi.verifyStripePayment({
+            orderId: placedOrder.id,
+            paymentIntentId: confirmedId,
+          });
+          finalizeOrderNavigation(paidOrder || placedOrder, placedOrder.orderNumber);
+          return;
+        }
+
+        const digits = cardNumber.replace(/\D/g, '');
+        const cardLast4 = digits.slice(-4) || '4242';
+        const cardBrand = detectCardBrand(digits || '4242');
+        const paidOrder = await paymentsApi.verifyStripePayment({
+          orderId: placedOrder.id,
+          paymentIntentId: paymentIntentId || placedOrder.paymentId,
+          cardBrand,
+          cardLast4,
+          method: 'card',
+        });
+        finalizeOrderNavigation(paidOrder || placedOrder, placedOrder.orderNumber);
+        return;
+      }
+
+      // PayPal Sandbox API fallback when user clicks primary CTA directly
+      const ppOrder = await paymentsApi.createPayPalOrder(placedOrder.id);
+      if (ppOrder.approvalUrl) {
+        pendingPayPalOrderRef.current = {
+          orderId: placedOrder.id,
+          orderNumber: placedOrder.orderNumber,
+        };
+        setErrorMessage(
+          `PayPal Sandbox order (${ppOrder.paypalOrderId}) created! Use the yellow PayPal Smart Button above to complete checkout.`
+        );
+        setIsProcessing(false);
+        setPaymentStep('form');
+        return;
+      }
+
+      finalizeOrderNavigation(placedOrder, placedOrder.orderNumber);
     } catch (error: any) {
       setErrorMessage(
         error.response?.data?.message ||
@@ -849,42 +1139,113 @@ export const CheckoutPage: React.FC = () => {
 
               {paymentMethod === 'stripe' ? (
                 <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3 mt-2">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">Card Number</label>
-                    <input
-                      type="text"
-                      placeholder="4242 4242 4242 4242"
-                      value={cardNumber}
-                      onChange={(e) => setCardNumber(e.target.value)}
-                      className="w-full text-sm p-2.5 rounded-lg border border-slate-300 bg-white font-mono"
-                    />
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 rounded-full">
+                      Stripe {paymentConfig?.stripeMode === 'live' ? 'Live' : 'Test Mode'}
+                    </span>
+                    {!paymentConfig?.stripeLiveElements && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCardNumber('4242 4242 4242 4242');
+                            setCardExpiry('12 / 28');
+                            setCardCvc('424');
+                          }}
+                          className="text-[10px] font-bold px-2 py-0.5 rounded bg-white border border-slate-300 text-slate-700 hover:bg-blue-50 hover:border-blue-300"
+                        >
+                          Fill Visa 4242
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCardNumber('5555 5555 5555 4444');
+                            setCardExpiry('11 / 28');
+                            setCardCvc('123');
+                          }}
+                          className="text-[10px] font-bold px-2 py-0.5 rounded bg-white border border-slate-300 text-slate-700 hover:bg-blue-50 hover:border-blue-300"
+                        >
+                          Fill Mastercard 4444
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Expiry Date</label>
-                      <input
-                        type="text"
-                        placeholder="MM / YY"
-                        value={cardExpiry}
-                        onChange={(e) => setCardExpiry(e.target.value)}
-                        className="w-full text-sm p-2.5 rounded-lg border border-slate-300 bg-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">CVC</label>
-                      <input
-                        type="text"
-                        placeholder="123"
-                        value={cardCvc}
-                        onChange={(e) => setCardCvc(e.target.value)}
-                        className="w-full text-sm p-2.5 rounded-lg border border-slate-300 bg-white font-mono"
-                      />
-                    </div>
-                  </div>
+
+                  {paymentConfig?.stripeLiveElements && stripePromise ? (
+                    <Elements stripe={stripePromise}>
+                      <StripeLiveConfirmBridge registerConfirmFn={registerStripeConfirm} />
+                    </Elements>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Card Number</label>
+                        <input
+                          type="text"
+                          placeholder="4242 4242 4242 4242"
+                          value={cardNumber}
+                          onChange={(e) => setCardNumber(e.target.value)}
+                          className="w-full text-sm p-2.5 rounded-lg border border-slate-300 bg-white font-mono"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Expiry Date</label>
+                          <input
+                            type="text"
+                            placeholder="MM / YY"
+                            value={cardExpiry}
+                            onChange={(e) => setCardExpiry(e.target.value)}
+                            className="w-full text-sm p-2.5 rounded-lg border border-slate-300 bg-white font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">CVC</label>
+                          <input
+                            type="text"
+                            placeholder="123"
+                            value={cardCvc}
+                            onChange={(e) => setCardCvc(e.target.value)}
+                            className="w-full text-sm p-2.5 rounded-lg border border-slate-300 bg-white font-mono"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Running in Stripe Test Card mode. Transaction ID &amp; card brand/last 4 digits are recorded in Order Tracking.
+                      </p>
+                    </>
+                  )}
                 </div>
               ) : (
-                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
-                  Clicking <span className="font-bold">Complete Order</span> will create your PayPal transaction and immediately mark the order for studio production in this environment.
+                <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200 space-y-3 mt-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-amber-800 bg-amber-100 border border-amber-300 px-2.5 py-0.5 rounded-full">
+                      PayPal {paymentConfig?.paypalMode === 'live' ? 'Live' : 'Sandbox Active'}
+                    </span>
+                    <span className="text-[11px] text-amber-900 font-medium">GBP (£) • Instant Capture</span>
+                  </div>
+                  <p className="text-xs text-amber-900 leading-relaxed">
+                    Ensure your delivery details and terms checkbox are filled, then authorise payment using your PayPal Sandbox account below:
+                  </p>
+                  {paymentConfig?.paypalClientId ? (
+                    <>
+                      <div ref={paypalContainerRef} className="min-h-[48px]" />
+                      {!paypalSdkReady && !paypalSdkError && (
+                        <div className="flex items-center gap-2 text-xs text-slate-600 py-2">
+                          <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                          <span>Loading PayPal Sandbox Checkout buttons...</span>
+                        </div>
+                      )}
+                      {paypalSdkError && (
+                        <div className="text-xs text-amber-800 bg-white/80 border border-amber-200 rounded-lg p-2.5">
+                          {paypalSdkError}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="text-xs text-amber-900 font-medium">
+                      PayPal credentials are not configured on the backend `.env` yet.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1032,24 +1393,31 @@ export const CheckoutPage: React.FC = () => {
               )}
 
               {/* Submit CTA */}
-              <button
-                type="submit"
-                disabled={isProcessing}
-                className="w-full py-4 px-6 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-700 transition-all shadow-md shadow-blue-500/20 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {isProcessing ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    {paymentStep === 'processing'
-                      ? 'Submitting Order & Processing...'
-                      : 'Finalising Payment...'}
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="w-4 h-4" /> Complete Order • {formatGBP(pricingSummary.totalPayable)}
-                  </>
-                )}
-              </button>
+              {paymentMethod === 'paypal' && paypalSdkReady ? (
+                <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 text-center font-semibold">
+                  Use the PayPal Sandbox button under Section 4 (Payment Method) to authorise &amp; pay{' '}
+                  {formatGBP(pricingSummary.totalPayable)}.
+                </div>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={isProcessing}
+                  className="w-full py-4 px-6 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-700 transition-all shadow-md shadow-blue-500/20 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {isProcessing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      {paymentStep === 'processing'
+                        ? 'Submitting Order & Processing...'
+                        : 'Finalising Payment...'}
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" /> Complete Order • {formatGBP(pricingSummary.totalPayable)}
+                    </>
+                  )}
+                </button>
+              )}
 
               <div className="flex items-center justify-center gap-4 text-[11px] text-slate-500 pt-2">
                 <span className="flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> Money-back print guarantee</span>
