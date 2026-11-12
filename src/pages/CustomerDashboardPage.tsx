@@ -17,6 +17,7 @@ import {
   AlertCircle,
   Pencil,
   Trash2,
+  ExternalLink,
 } from 'lucide-react';
 import { authApi, ordersApi, quotesApi, SavedAddressItem } from '../api';
 import { formatGBP } from '../lib/utils';
@@ -538,8 +539,75 @@ export const CustomerDashboardPage: React.FC = () => {
                         <p className="text-xs font-semibold text-slate-800 capitalize">
                           {quote.serviceCategory.replace(/_/g, ' ')} • Quantity: {quote.quantity}
                         </p>
+
+                        {/* Submitted Specifications & Cloudinary PDF Links */}
+                        <div className="flex flex-wrap gap-1.5 pt-1 text-[11px]">
+                          {quote.specifications?.paperSize && (
+                            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">
+                              {quote.specifications.paperSize} • {quote.specifications.paperWeight || 'Standard'}
+                            </span>
+                          )}
+                          {quote.specifications?.colorMode && (
+                            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">
+                              {quote.specifications.colorMode === 'color' ? 'Full Colour' : 'Black & White'}
+                            </span>
+                          )}
+                          {(quote.specifications?.printSides || quote.specifications?.sides) && (
+                            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium capitalize">
+                              {quote.specifications.printSides || quote.specifications.sides}
+                            </span>
+                          )}
+                          {quote.specifications?.bindingType && quote.specifications.bindingType !== 'none' && (
+                            <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-medium capitalize">
+                              {quote.specifications.bindingType}
+                            </span>
+                          )}
+                          {quote.specifications?.preferredDeadline && (
+                            <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 font-medium">
+                              Deadline: {quote.specifications.preferredDeadline}
+                            </span>
+                          )}
+                        </div>
+
+                        {quote.customerNotes && (
+                          <p className="text-xs text-slate-600">
+                            <span className="font-semibold text-slate-700">Your brief:</span> {quote.customerNotes}
+                          </p>
+                        )}
+
+                        {Array.isArray(quote.fileUrls) && quote.fileUrls.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 pt-1">
+                            {quote.fileUrls.map((f: any, fi: number) => {
+                              const rawUrl = f.url || f.secureUrl || '';
+                              const docUrl = rawUrl.startsWith('http')
+                                ? rawUrl
+                                : rawUrl
+                                ? `http://localhost:5000${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`
+                                : '';
+                              return docUrl ? (
+                                <a
+                                  key={f.id || fi}
+                                  href={docUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 text-[11px] font-semibold text-blue-700"
+                                >
+                                  <ExternalLink className="w-3 h-3" /> {f.name || `Document ${fi + 1}`}
+                                  {f.pageCount ? ` (${f.pageCount}p)` : ''}
+                                </a>
+                              ) : (
+                                <span key={f.id || fi} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 text-[11px] text-slate-600">
+                                  <FileText className="w-3 h-3" /> {f.name || `Document ${fi + 1}`}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+
                         {quote.adminNotes && (
-                          <p className="text-xs text-slate-600 italic">"{quote.adminNotes}"</p>
+                          <p className="text-xs text-slate-700 bg-blue-50/70 border border-blue-100 rounded-lg px-2.5 py-1.5 italic">
+                            Studio reply: "{quote.adminNotes}"
+                          </p>
                         )}
                         <p className="text-[11px] text-slate-400">
                           Requested {new Date(quote.createdAt).toLocaleDateString('en-GB')}

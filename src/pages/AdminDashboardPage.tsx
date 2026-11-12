@@ -25,7 +25,10 @@ import {
   SlidersHorizontal,
   Check,
   X,
-  Database
+  Database,
+  CreditCard,
+  Eye,
+  Phone,
 } from 'lucide-react';
 import { formatGBP } from '../lib/utils';
 import { ordersApi, quotesApi, couponsApi, pricingApi } from '../api';
@@ -77,6 +80,9 @@ export const AdminDashboardPage: React.FC = () => {
   const [quotePrice, setQuotePrice] = useState('');
   const [quoteTurnaround, setQuoteTurnaround] = useState('1–2 Working Days');
   const [quoteNotes, setQuoteNotes] = useState('');
+  const [trackingDrafts, setTrackingDrafts] = useState<Record<string, string>>({});
+  const [savingTrackingId, setSavingTrackingId] = useState<string | null>(null);
+  const [previewDocument, setPreviewDocument] = useState<{ name: string; url: string } | null>(null);
   const [quoteSubmitting, setQuoteSubmitting] = useState(false);
 
   // Coupons state
@@ -291,13 +297,28 @@ export const AdminDashboardPage: React.FC = () => {
     }
   }, [priceCategoryFilter, priceQuoteOnlyFilter]);
 
-  // Update order status
-  const handleUpdateOrderStatus = async (orderId: string, newStatus: string) => {
+  // Update order status or tracking number
+  const handleUpdateOrderStatus = async (orderId: string, newStatus: string, trackingNumber?: string) => {
     try {
-      await ordersApi.updateOrderStatus(orderId, newStatus);
-      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
+      const updated = await ordersApi.updateOrderStatus(orderId, newStatus, trackingNumber);
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: updated?.status || newStatus, trackingNumber: trackingNumber ?? updated?.trackingNumber ?? o.trackingNumber } : o));
+      showToast('Order updated.');
     } catch {
-      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus, trackingNumber: trackingNumber ?? o.trackingNumber } : o));
+    }
+  };
+
+  const handleSaveTrackingNumber = async (order: any) => {
+    const draft = (trackingDrafts[order.id] ?? order.trackingNumber ?? '').trim();
+    setSavingTrackingId(order.id);
+    try {
+      const updated = await ordersApi.updateOrderStatus(order.id, order.status, draft);
+      setOrders(prev => prev.map(o => o.id === order.id ? { ...o, trackingNumber: updated?.trackingNumber ?? draft } : o));
+      showToast(`Tracking number saved for ${order.orderNumber}`);
+    } catch (err: any) {
+      showToast(err.response?.data?.message || 'Failed to update tracking number.');
+    } finally {
+      setSavingTrackingId(null);
     }
   };
 
@@ -751,19 +772,65 @@ export const AdminDashboardPage: React.FC = () => {
                                 <div>Sides: <strong className="text-slate-200">{cfg.printSides === 'duplex' ? 'Double-Sided' : 'Single-Sided'}</strong></div>
                                 <div>Binding: <strong className="text-slate-200">{cfg.bindingType || 'None'}</strong></div>
                               </div>
-                              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between">
-                                <span className="text-[11px] text-slate-400">
-                                  Sheets: <strong>{cfg.physicalSheets || '-'}</strong> | Pages: <strong>{cfg.totalPages || '-'}</strong>
-                                </span>
-                                <a
-                                  href={`/api/documents/${item.id}/download`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-[11px] font-bold text-blue-400 hover:text-blue-300 underline flex items-center gap-1"
-                                >
-                                  <span>Download PDF</span>
-                                  <ExternalLink className="w-3 h-3" />
-                                </a>
+                              <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                                  <span>
+                                    Sheets: <strong>{cfg.physicalSheets || '-'}</strong> | Pages: <strong>{cfg.totalPages || '-'}</strong>
+                                  </span>
+                                  <span>
+                                    Item Total: <strong className="text-slate-200">{formatGBP(Number(item.totalPrice || 0))}</strong>
+                                  </span>
+                                </div>
+
+                                {/* Attached Cloudinary / Server PDF Documents */}
+                                <div className="space-y-1.5">
+                                  {Array.isArray(item.files) && item.files.length > 0 ? (
+                                    item.files.map((file: any, fIdx: number) => {
+                                      const rawUrl = file.secureUrl || file.url || '';
+                                      const docUrl = rawUrl.startsWith('http')
+                                        ? rawUrl
+                                        : rawUrl
+                                        ? `http://localhost:5000${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`
+                                        : '';
+                                      return (
+                                        <div
+                                          key={file.id || fIdx}
+                                          className="flex items-center justify-between gap-2 bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1.5"
+                                        >
+                                          <span className="truncate text-[11px] text-slate-300 flex items-center gap-1.5">
+                                            <FileText className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                                            <span className="truncate">{file.originalName || file.name || `Document_${fIdx + 1}.pdf`}</span>
+                                            {file.pageCount ? <span className="text-slate-500">({file.pageCount}p)</span> : null}
+                                          </span>
+                                          {docUrl ? (
+                                            <div className="flex items-center gap-2 shrink-0">
+                                              <button
+                                                type="button"
+                                                onClick={() => setPreviewDocument({ name: file.originalName || 'PDF Document', url: docUrl })}
+                                                className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer"
+                                              >
+                                                <Eye className="w-3 h-3" /> Preview
+                                              </button>
+                                              <a
+                                                href={docUrl}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="text-[11px] font-bold text-blue-400 hover:text-blue-300 underline flex items-center gap-1"
+                                              >
+                                                <span>Open PDF</span>
+                                                <ExternalLink className="w-3 h-3" />
+                                              </a>
+                                            </div>
+                                          ) : (
+                                            <span className="text-[10px] text-slate-500 italic">No link</span>
+                                          )}
+                                        </div>
+                                      );
+                                    })
+                                  ) : (
+                                    <div className="text-[11px] text-amber-400/90 italic">No PDF files linked to this line item.</div>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           );
@@ -781,6 +848,82 @@ export const AdminDashboardPage: React.FC = () => {
                       </div>
                       <div>
                         <strong>Shipping To:</strong> {order.shippingAddress?.addressLine1}, {order.shippingAddress?.city} {order.shippingAddress?.postcode}
+                      </div>
+                    </div>
+
+                    {/* Order Payment & Transaction Tracking */}
+                    <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800/80 grid grid-cols-1 lg:grid-cols-12 gap-3 items-center text-xs">
+                      <div className="lg:col-span-7 space-y-1.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                            <CreditCard className="w-3 h-3" />
+                            {order.paymentProvider === 'paypal' ? 'PayPal' : 'Stripe'}
+                            {order.paymentDetails?.mode ? ` (${order.paymentDetails.mode})` : ''}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                            order.paymentStatus === 'succeeded'
+                              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                              : order.paymentStatus === 'failed' || order.paymentStatus === 'refunded'
+                              ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
+                              : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                          }`}>
+                            Payment: {order.paymentStatus || 'pending'}
+                          </span>
+                          {order.couponCode && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                              Coupon: {order.couponCode} (-{formatGBP(Number(order.discountAmount || 0))})
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
+                          <span>
+                            Ref ID:{' '}
+                            <strong className="font-mono text-slate-200">
+                              {order.paymentId || 'Pending authorisation'}
+                            </strong>
+                          </span>
+                          {order.paymentDetails?.cardBrand && order.paymentDetails?.cardLast4 && (
+                            <span>
+                              Method:{' '}
+                              <strong className="text-slate-200">
+                                {order.paymentDetails.cardBrand} •••• {order.paymentDetails.cardLast4}
+                              </strong>
+                            </span>
+                          )}
+                          {order.paymentProvider === 'paypal' && order.paymentDetails?.payerEmail && (
+                            <span>
+                              PayPal Payer:{' '}
+                              <strong className="text-slate-200">{order.paymentDetails.payerEmail}</strong>
+                            </span>
+                          )}
+                          {order.paymentDetails?.paidAt && (
+                            <span>
+                              Paid: <strong className="text-slate-300">{new Date(order.paymentDetails.paidAt).toLocaleString('en-GB')}</strong>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Editable Courier Tracking Number */}
+                      <div className="lg:col-span-5 flex items-center gap-2">
+                        <input
+                          type="text"
+                          placeholder="Royal Mail / DPD Tracking #"
+                          value={trackingDrafts[order.id] ?? order.trackingNumber ?? ''}
+                          onChange={(e) =>
+                            setTrackingDrafts((prev) => ({ ...prev, [order.id]: e.target.value }))
+                          }
+                          className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-mono text-white placeholder-slate-500 focus:border-blue-500 focus:outline-hidden"
+                        />
+                        <button
+                          type="button"
+                          disabled={savingTrackingId === order.id}
+                          onClick={() => handleSaveTrackingNumber(order)}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white text-[11px] font-bold border border-slate-700 transition-colors cursor-pointer shrink-0"
+                        >
+                          {savingTrackingId === order.id ? 'Saving...' : 'Save Track'}
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -849,9 +992,42 @@ export const AdminDashboardPage: React.FC = () => {
                         </span>
                       </div>
 
-                      <div className="text-xs text-slate-300 font-semibold">{q.customerName} ({q.customerEmail})</div>
+                      <div className="text-xs text-slate-300 font-semibold">
+                        {q.customerName} ({q.customerEmail})
+                        {q.customerPhone ? ` • ${q.customerPhone}` : ''}
+                      </div>
                       <div className="text-xs text-slate-400 mt-1 line-clamp-2">
                         {q.customerNotes || `Bulk print request for ${q.quantity} copies (${q.serviceCategory}).`}
+                      </div>
+
+                      {/* Key Specs & File Badges on Quote Card */}
+                      <div className="mt-2.5 flex flex-wrap gap-1.5 text-[10px]">
+                        <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200 font-semibold capitalize">
+                          {String(q.specifications?.serviceType || q.serviceCategory || 'document').replace(/_/g, ' ')}
+                        </span>
+                        {q.specifications?.paperSize && (
+                          <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200">
+                            {q.specifications.paperSize} • {q.specifications.paperWeight || '80gsm'}
+                          </span>
+                        )}
+                        {q.specifications?.colorMode && (
+                          <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-200">
+                            {q.specifications.colorMode === 'color' ? 'Full Colour' : 'B&W'}
+                          </span>
+                        )}
+                        {q.specifications?.bindingType && q.specifications.bindingType !== 'none' && (
+                          <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 capitalize">
+                            {q.specifications.bindingType}
+                          </span>
+                        )}
+                        {q.specifications?.preferredDeadline && (
+                          <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                            Due: {q.specifications.preferredDeadline}
+                          </span>
+                        )}
+                        <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-semibold">
+                          {Array.isArray(q.fileUrls) ? q.fileUrls.length : 0} PDF(s)
+                        </span>
                       </div>
 
                       <div className="mt-3 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs">
@@ -875,7 +1051,137 @@ export const AdminDashboardPage: React.FC = () => {
                       <div className="border-b border-slate-800 pb-3">
                         <span className="text-xs text-blue-400 font-bold uppercase">Responding to</span>
                         <h3 className="text-base font-black text-white font-mono">{selectedQuote.quoteNumber}</h3>
-                        <p className="text-xs text-slate-400 mt-0.5">{selectedQuote.customerName} • {selectedQuote.customerEmail}</p>
+                        <p className="text-xs text-slate-300 mt-0.5">{selectedQuote.customerName} • {selectedQuote.customerEmail}</p>
+                        {selectedQuote.customerPhone && (
+                          <p className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1">
+                            <Phone className="w-3 h-3 text-blue-400" /> {selectedQuote.customerPhone}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Complete Customer Quote Input Specifications */}
+                      <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2.5 text-xs">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                          Submitted Print Specifications
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px]">
+                          <div>
+                            <span className="text-slate-500 block">Service</span>
+                            <strong className="text-slate-200 capitalize">
+                              {String(selectedQuote.specifications?.serviceType || selectedQuote.serviceCategory || 'Document').replace(/_/g, ' ')}
+                            </strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block">Quantity / Copies</span>
+                            <strong className="text-white">{selectedQuote.quantity?.toLocaleString()}</strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block">Paper Size &amp; Weight</span>
+                            <strong className="text-slate-200">
+                              {selectedQuote.specifications?.paperSize || '-'} • {selectedQuote.specifications?.paperWeight || '-'}
+                            </strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block">Colour &amp; Sides</span>
+                            <strong className="text-slate-200 capitalize">
+                              {selectedQuote.specifications?.colorMode === 'color' ? 'Full Colour' : 'B&W'} •{' '}
+                              {selectedQuote.specifications?.printSides || selectedQuote.specifications?.sides || '-'}
+                            </strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block">Layout / Pages per Sheet</span>
+                            <strong className="text-slate-200 capitalize">
+                              {selectedQuote.specifications?.pagesPerSheet || 1}/sheet ({selectedQuote.specifications?.orientation || 'auto'})
+                            </strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block">Binding / Covers</span>
+                            <strong className="text-slate-200 capitalize">
+                              {selectedQuote.specifications?.bindingType || 'None'}
+                              {(selectedQuote.specifications?.frontCover && selectedQuote.specifications.frontCover !== 'none') ||
+                              (selectedQuote.specifications?.backCover && selectedQuote.specifications.backCover !== 'none')
+                                ? ` (F:${selectedQuote.specifications?.frontCover || 'none'} / B:${selectedQuote.specifications?.backCover || 'none'})`
+                                : ''}
+                            </strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block">Calculated Volume</span>
+                            <strong className="text-slate-200">
+                              {selectedQuote.specifications?.totalRawPages || '?'}p • {selectedQuote.specifications?.totalPrintedSides || '?'} sides •{' '}
+                              {selectedQuote.specifications?.totalSheets || selectedQuote.specifications?.physicalSheets || '?'} sheets
+                            </strong>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block">Preferred Deadline</span>
+                            <strong className="text-amber-300">
+                              {selectedQuote.specifications?.preferredDeadline || 'Flexible'}
+                            </strong>
+                          </div>
+                        </div>
+
+                        {selectedQuote.customerNotes && (
+                          <div className="pt-2 border-t border-slate-800/80 text-[11px]">
+                            <span className="text-slate-500 block mb-0.5">Customer Finishing Notes</span>
+                            <p className="text-slate-200 leading-relaxed">{selectedQuote.customerNotes}</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Uploaded Artwork PDFs (Cloudinary Direct View) */}
+                      <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2 text-xs">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                          Uploaded Documents ({Array.isArray(selectedQuote.fileUrls) ? selectedQuote.fileUrls.length : 0})
+                        </div>
+                        {Array.isArray(selectedQuote.fileUrls) && selectedQuote.fileUrls.length > 0 ? (
+                          <div className="space-y-2">
+                            {selectedQuote.fileUrls.map((f: any, idx: number) => {
+                              const rawUrl = f.url || f.secureUrl || '';
+                              const docUrl = rawUrl.startsWith('http')
+                                ? rawUrl
+                                : rawUrl
+                                ? `http://localhost:5000${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`
+                                : '';
+                              return (
+                                <div
+                                  key={f.id || idx}
+                                  className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between gap-2"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="font-semibold text-slate-200 truncate text-[11px]">
+                                      {f.name || `Quote_Document_${idx + 1}.pdf`}
+                                    </div>
+                                    {f.pageCount ? (
+                                      <div className="text-[10px] text-slate-500">{f.pageCount} pages</div>
+                                    ) : null}
+                                  </div>
+                                  {docUrl ? (
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => setPreviewDocument({ name: f.name || 'Quote PDF', url: docUrl })}
+                                        className="px-2 py-1 rounded bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <Eye className="w-3 h-3" /> Preview
+                                      </button>
+                                      <a
+                                        href={docUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold text-[10px] flex items-center gap-1"
+                                      >
+                                        <ExternalLink className="w-3 h-3" /> View
+                                      </a>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-500 italic">No URL</span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-slate-500 italic">No documents uploaded on this quote.</div>
+                        )}
                       </div>
 
                       <div>
@@ -1566,6 +1872,42 @@ export const AdminDashboardPage: React.FC = () => {
         )}
 
       </main>
+
+      {/* Inline PDF Viewer Modal */}
+      {previewDocument && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-5xl h-[85vh] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <FileText className="w-4 h-4 text-blue-400 shrink-0" />
+                <span className="text-sm font-bold text-white truncate">{previewDocument.name}</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={previewDocument.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" /> Open in New Tab
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewDocument(null)}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <iframe
+              title={previewDocument.name}
+              src={previewDocument.url}
+              className="w-full flex-1 bg-white"
+            />
+          </div>
+        </div>
+      )}
 
     </div>
   );
